@@ -1,12 +1,5 @@
---[[
-SOURCE_ https://github.com/tomasklaen/uosc/tree/main/src/uosc
-COMMIT_ d42f82592aaed72c28649e8a19e9c71c5255f923
-文档_ https://github.com/hooke007/MPV_lazy/discussions/186
-
-极简主义设计驱动的多功能界面脚本群组，兼容 thumbfast 新缩略图引擎
-]]
-
-local uosc_version = '5.10.0'
+--[[ uosc | https://github.com/tomasklaen/uosc ]]
+local uosc_version = '5.13.0'
 
 mp.commandv('script-message', 'uosc-version', uosc_version)
 
@@ -18,74 +11,67 @@ utils = require('mp.utils')
 msg = require('mp.msg')
 osd = mp.create_osd_overlay('ass-events')
 QUARTER_PI_SIN = math.sin(math.pi / 4)
+
 require('lib/std')
-require('lib/lang')
 
 --[[ OPTIONS ]]
 
 defaults = {
 	timeline_style = 'bar',
 	timeline_line_width = 2,
-	timeline_size = 20,
+	timeline_size = 6,
 	progress = 'windowed',
 	progress_size = 2,
 	progress_line_width = 12,
+	timeline_persistency = '',
 	timeline_border = 1,
-	timeline_step = '1',
+	timeline_step = '5',
 	timeline_cache = true,
-	timeline_persistency = 'idle,audio',
+	timeline_heatmap = 'overlay',
+	timeline_mbtn_right = 'idle,audio',
 
 	controls =
-	'menu,ST-stats_tog,ST-thumb_tog,gap,play_pause,gap,subtitles,audio,<has_chapter>chapters,<has_many_edition>editions,<has_many_video>video,<stream>stream-quality,gap,space,speed,space,shuffle,loop-playlist,loop-file,gap,prev,items,next,gap,fullscreen',
+	'gap,prev,gap,play-pause,gap,next,gap,<!idle>time,<has_many_video>video,<has_many_edition>editions,<stream>stream-quality,gap,space,gap,episode,gap,speed,gap,<has_chapter>chapters,gap,danmaku_toggle,danmaku_styles,subtitles,audio,volume,play-mode,fullscreen',
 	controls_size = 32,
 	controls_margin = 8,
 	controls_spacing = 2,
 	controls_persistency = 'idle,audio',
 
-	volume = 'right',
-	volume_size = 32,
-	volume_border = 0,
-	volume_step = 1,
-	volume_persistency = 'idle',
-
-	speed_step = 0.1,
-	speed_step_is_factor = false,
-	speed_persistency = 'idle,audio',
-
-	menu_item_height = 32,
-	menu_min_width = 210,
-	menu_padding = 1,
+	menu_item_height = 36,
+	menu_min_width = 260,
+	menu_padding = 4,
 	menu_type_to_search = true,
 
 	top_bar = 'no-border',
-	top_bar_size = 36,
+	top_bar_size = 40,
+	top_bar_persistency = 'idle,audio',
 	top_bar_controls = 'right',
 	top_bar_title = 'yes',
 	top_bar_alt_title = '',
 	top_bar_alt_title_place = 'below',
 	top_bar_flash_on = 'video,audio',
-	top_bar_persistency = 'idle,audio',
 
 	window_border_size = 0,
 
 	autoload = false,
 	shuffle = false,
 
-	scale = 0,
-	scale_fullscreen = 1,
+	scale = 1,
+	scale_fullscreen = 1.3,
 	font_scale = 1,
-	font_bold = false,
-	text_border = 0,
-	border_radius = 8,
+	text_border = 1.2,
+	border_radius = 4,
 	color = '',
 	opacity = '',
 	animation_duration = 100,
-	refine = 'text_width,sorting',
+	refine = '',
 	flash_duration = 1000,
 	proximity_in = 40,
 	proximity_out = 120,
-	destination_time = 'total',
+	total_time = false, -- deprecated by below
+	destination_time = 'playtime-remaining',
 	time_precision = 0,
+	font_bold = false,
 	autohide = false,
 	buffered_time_threshold = 60,
 	pause_indicator = 'flash',
@@ -93,26 +79,20 @@ defaults = {
 	video_types =
 	'3g2,3gp,asf,avi,f4v,flv,h264,h265,m2ts,m4v,mkv,mov,mp4,mp4v,mpeg,mpg,ogm,ogv,rm,rmvb,ts,vob,webm,wmv,y4m',
 	audio_types =
-	'aac,ac3,aiff,ape,au,dsf,dts,flac,m4a,mid,midi,mka,mp3,mp4a,oga,ogg,opus,spx,tak,tta,wav,weba,wma,wv',
-	image_types =
-	'apng,avif,bmp,gif,j2k,jp2,jfif,jpeg,jpg,jxl,mj2,png,svg,tga,tif,tiff,webp',
+	'aac,ac3,aiff,ape,au,cue,dsf,dts,flac,m4a,mid,midi,mka,mp3,mp4a,oga,ogg,opus,spx,tak,tta,wav,weba,wma,wv',
+	image_types = 'apng,avif,bmp,gif,j2k,jp2,jfif,jpeg,jpg,jxl,mj2,png,svg,tga,tif,tiff,webp',
 	subtitle_types = 'aqt,ass,gsub,idx,jss,lrc,mks,pgs,pjs,psb,rt,sbv,slt,smi,sub,sup,srt,ssa,ssf,ttxt,txt,usf,vt,vtt',
 	playlist_types = 'm3u,m3u8,pls,url,cue',
-	load_types = 'video',
+	load_types = 'video,audio,image',
 	default_directory = '~/',
 	show_hidden_files = false,
 	use_trash = false,
-	adjust_osd_margins = false,
+	adjust_osd_margins = true,
 	chapter_ranges = 'openings:30abf964,endings:30abf964,ads:c54e4e80',
 	chapter_range_patterns = 'openings:オープニング;endings:エンディング',
-	languages = 'slang,en',                   -- https://opensubtitles.stoplight.io/docs/opensubtitles-api/1de776d20e873-languages
+	languages = 'slang,en',
+	subtitles_directory = '~~/subtitles',
 	disable_elements = '',
-	subtitles_directory = '~~/_cache/usubs',
-	idlescreen = true,
-	idlemsg = 'default',
-	idle_call_menu = 0,
-	custom_font = 'default',
-	ziggy_pth = 'default',
 }
 options = table_copy(defaults)
 function handle_options(changed_options)
@@ -126,30 +106,23 @@ function handle_options(changed_options)
 	Elements:update_proximities()
 	request_render()
 end
-opt.read_options(options, nil, handle_options)
+opt.read_options(options, 'uosc', handle_options)
 -- Normalize values
 options.proximity_out = math.max(options.proximity_out, options.proximity_in + 1)
 if options.chapter_ranges:sub(1, 4) == '^op|' then options.chapter_ranges = defaults.chapter_ranges end
+if options.total_time and options.destination_time == 'playtime-remaining' then
+	msg.warn('`total_time` is deprecated. Use `destination_time` instead.')
+	options.destination_time = 'total'
+elseif not itable_index_of({'total', 'playtime-remaining', 'time-remaining'}, options.destination_time) then
+	options.destination_time = 'playtime-remaining'
+end
 if not itable_index_of({'left', 'right'}, options.top_bar_controls) then
 	options.top_bar_controls = options.top_bar_controls == 'yes' and 'right' or nil
 end
 
--- 用于UI倍率计算
-function auto_ui_scale()
-	local display_w, display_h = mp.get_property_number('display-width', 0), mp.get_property_number('display-height', 0)
-	local display_aspect = display_w / display_h or 0
-	local factor = 1
-	if display_aspect >= 1 then
-		factor = tonumber(string.format('%.2f', display_h / 1080))
-	else
-		factor = tonumber(string.format('%.2f', display_w / 1080))
-	end
-	return factor
-end
--- 设置脚本属性
-mp.set_property_native('user-data/osc', { idlescreen = options.idlescreen })
-
---[[ Language ]]
+--[[ INTERNATIONALIZATION ]]
+local intl = require('lib/intl')
+t = intl.t
 require('lib/char_conv')
 fzy = require('lib/fzy')
 
@@ -157,33 +130,36 @@ fzy = require('lib/fzy')
 local config_defaults = {
 	color = {
 		foreground = serialize_rgba('ffffff').color,
-		foreground_text = serialize_rgba('121212').color,
-		background = serialize_rgba('121212').color,
+		foreground_text = serialize_rgba('000000').color,
+		background = serialize_rgba('000000').color,
 		background_text = serialize_rgba('ffffff').color,
-		curtain = serialize_rgba('0c90db').color,
-		success = serialize_rgba('098b37').color,
-		error = serialize_rgba('dd0d0d').color,
-		match = serialize_rgba('3bb3ff').color,
+		window_border = serialize_rgba('000000').color,
+		curtain = serialize_rgba('111111').color,
+		success = serialize_rgba('a5e075').color,
+		error = serialize_rgba('ff616e').color,
+		match = serialize_rgba('69c5ff').color,
+		heatmap = serialize_rgba('00adee').color,
 	},
 	opacity = {
-		timeline = 0.3,
+		timeline = 0.9,
 		position = 1,
 		chapters = 0.8,
-		slider = 0.8,
+		slider = 0.9,
 		slider_gauge = 1,
 		controls = 0,
 		speed = 0.6,
-		menu = 0.8,
-		submenu = 0.6,
+		menu = 1,
+		submenu = 0.4,
 		border = 1,
 		title = 1,
 		tooltip = 1,
 		thumbnail = 1,
-		curtain = 0.5,
+		curtain = 0.8,
 		idle_indicator = 0.8,
 		audio_indicator = 0.5,
 		buffering_indicator = 0.3,
 		playlist_position = 0.8,
+		heatmap = 0.4,
 	},
 }
 config = {
@@ -193,15 +169,7 @@ config = {
 	-- sets max rendering frequency in case the
 	-- native rendering frequency could not be detected
 	render_delay = 1 / 60,
-	font = (function()
-			local font_osd = mp.get_property_native('options/osd-font')
-			local font_u = options.custom_font
-			if font_u ~= 'default' then
-				return font_u
-			else
-				return font_osd
-			end
-	end)(),
+	font = mp.get_property('options/osd-font'),
 	osd_margin_x = mp.get_property('osd-margin-x'),
 	osd_margin_y = mp.get_property('osd-margin-y'),
 	osd_alignment_x = mp.get_property('osd-align-x'),
@@ -252,7 +220,7 @@ config = {
 	color = table_copy(config_defaults.color),
 	opacity = table_copy(config_defaults.opacity),
 	cursor_leave_fadeout_elements = {'timeline', 'volume', 'top_bar', 'controls'},
-	timeline_step = 1,
+	timeline_step = 5,
 	timeline_step_flag = '',
 }
 
@@ -315,7 +283,7 @@ function update_config()
 	do
 		local is_exact = options.timeline_step:sub(-1) == '!'
 		config.timeline_step = tonumber(is_exact and options.timeline_step:sub(1, -2) or options.timeline_step)
-		config.timeline_step_flag = is_exact and 'exact' or 'keyframes'
+		config.timeline_step_flag = is_exact and 'exact' or ''
 	end
 
 	-- Other
@@ -323,43 +291,57 @@ function update_config()
 end
 update_config()
 
--- 上下文菜单的默认内容
+-- Default menu items
 function create_default_menu_items()
 	return {
-		{title = ulang._cm_load, items = {
-			{title = ulang._cm_file_browser, value = 'script-binding uosc/open-file'},
-			{title = ulang._cm_import_sid, value = 'script-binding uosc/load-subtitles'},
-		},},
-		{title = ulang._cm_navigation, items = {
-			{title = ulang._cm_playlist, value = 'script-binding uosc/playlist'},
-			{title = ulang._cm_edition_list, value = 'script-binding uosc/editions'},
-			{title = ulang._cm_chapter_list, value = 'script-binding uosc/chapters'},
-			{title = ulang._cm_vid_list, value = 'script-binding uosc/video'},
-			{title = ulang._cm_aid_list, value = 'script-binding uosc/audio'},
-			{title = ulang._cm_sid_list, value = 'script-binding uosc/subtitles'},
-			{title = ulang._cm_playlist_shuffle, value = 'playlist-shuffle'},
-		},},
-		{title = ulang._cm_ushot, value = 'script-binding uosc/shot'},
-		{title = ulang._cm_video, items = {
-			{title = ulang._cm_decoding_api, value = 'cycle-values hwdec no auto auto-copy'},
-			{title = ulang._cm_deband_toggle, value = 'cycle deband'},
-			{title = ulang._cm_deint_toggle, value = 'cycle deinterlace'},
-			{title = ulang._cm_icc_toggle, value = 'cycle icc-profile-auto'},
-			{title = ulang._cm_corpts_toggle, value = 'cycle correct-pts'},
-		},},
-		{title = ulang._cm_tools, items = {
-			{title = ulang._cm_keybinding, value = 'script-binding uosc/keybinds'},
-			{title = ulang._cm_stats_toggle, value = 'script-binding display-stats-toggle'},
-			{title = ulang._cm_console_on, value = 'script-binding commands/open'},
-			{title = ulang._cm_border_toggle, value = 'cycle border'},
-			{title = ulang._cm_ontop_toggle, value = 'cycle ontop'},
-			{title = ulang._cm_audio_device, value = 'script-binding uosc/audio-device'},
-			{title = ulang._cm_stream_quality, value = 'script-binding uosc/stream-quality'},
-			{title = ulang._cm_show_file_dir, value = 'script-binding uosc/show-in-directory'},
-			{title = ulang._cm_show_config_dir, value = 'script-binding uosc/open-config-directory'},
-		},},
-		{title = ulang._cm_stop, value = 'stop'},
-		{title = ulang._cm_quit, value = 'quit'},
+		{title = t('Subtitles'), value = 'script-binding uosc/subtitles'},
+		{title = t('Audio tracks'), value = 'script-binding uosc/audio'},
+		{title = t('Stream quality'), value = 'script-binding uosc/stream-quality'},
+		{title = t('Playlist'), value = 'script-binding uosc/items'},
+		{title = t('Chapters'), value = 'script-binding uosc/chapters'},
+		{
+			title = t('Navigation'),
+			items = {
+				{
+					title = t('Next'),
+					hint = t('playlist or file'),
+					value =
+					'script-binding uosc/next',
+				},
+				{
+					title = t('Prev'),
+					hint = t('playlist or file'),
+					value =
+					'script-binding uosc/prev',
+				},
+				{title = t('Delete file & Next'), value = 'script-binding uosc/delete-file-next'},
+				{title = t('Delete file & Prev'), value = 'script-binding uosc/delete-file-prev'},
+				{title = t('Delete file & Quit'), value = 'script-binding uosc/delete-file-quit'},
+				{title = t('Open file'), value = 'script-binding uosc/open-file'},
+			},
+		},
+		{
+			title = t('Utils'),
+			items = {
+				{
+					title = t('Aspect ratio'),
+					items = {
+						{title = t('Default'), value = 'set video-aspect-override no'},
+						{title = '16:9', value = 'set video-aspect-override "16:9"'},
+						{title = '4:3', value = 'set video-aspect-override "4:3"'},
+						{title = '2.35:1', value = 'set video-aspect-override "2.35:1"'},
+					},
+				},
+				{title = t('Audio devices'), value = 'script-binding uosc/audio-device'},
+				{title = t('Editions'), value = 'script-binding uosc/editions'},
+				{title = t('Screenshot'), value = 'async screenshot'},
+				{title = t('Key bindings'), value = 'script-binding uosc/keybinds'},
+				{title = t('Show in directory'), value = 'script-binding uosc/show-in-directory'},
+				{title = t('Open config folder'), value = 'script-binding uosc/open-config-directory'},
+				{title = t('Update uosc'), value = 'script-binding uosc/update'},
+			},
+		},
+		{title = t('Quit'), value = 'quit'},
 	}
 end
 
@@ -436,8 +418,6 @@ state = {
 	hidpi_scale = 1,
 	scale = 1,
 	radius = 0,
-	idlescreen = options.idlescreen,
-	idlemsg = options.idlemsg,
 }
 buttons = require('lib/buttons')
 thumbnail = {width = 0, height = 0, disabled = false}
@@ -455,27 +435,16 @@ require('lib/menus')
 -- Determine path to ziggy
 do
 	local bin = 'ziggy-' .. (state.platform == 'windows' and 'windows.exe' or state.platform)
-	config.ziggy_path = options.ziggy_pth ~= "default" and mp.command_native({'expand-path', options.ziggy_pth}) or (join_path(mp.get_script_directory(), join_path('bin', bin)))
+	config.ziggy_path = os.getenv('MPV_UOSC_ZIGGY') or join_path(mp.get_script_directory(), join_path('bin', bin))
 end
 
 --[[ STATE UPDATERS ]]
 
 function update_display_dimensions()
+	state.scale = (state.hidpi_scale or 1) * (state.fullormaxed and options.scale_fullscreen or options.scale)
+	state.radius = round(options.border_radius * state.scale)
 	local real_width, real_height = mp.get_osd_size()
 	if real_width <= 0 then return end
-
-	-- 此处起才能获取到显示分辨率的信息
-	local dpi, scale_fom = state.hidpi_scale, options.scale_fullscreen
-	if scale_fom <= 0 then scale_fom = 1 end
-	if options.scale < 0 then
-		state.scale = (dpi or 1) * (state.fullormaxed and scale_fom or 1)
-	elseif options.scale == 0 then
-		state.scale = auto_ui_scale() * (state.fullormaxed and scale_fom or 1)
-	else
-		state.scale = options.scale * (state.fullormaxed and scale_fom or 1)
-	end
-
-	state.radius = round(options.border_radius * state.scale)
 	display.bx, display.width, display.by, display.height = real_width, real_width, real_height, real_height
 	display.initialized = true
 
@@ -538,15 +507,9 @@ function update_margins()
 		bottom = (display.height - timeline.ay) / display.height
 	end
 
-	if causes_margin(top_bar) then top = top_bar.title_by / display.height end
-
-	if causes_margin(volume) then
-		if options.volume == 'left' then
-			left = volume.bx / display.width
-		elseif options.volume == 'right' then
-			right = volume.ax / display.width
-		end
-	end
+	if causes_margin(top_bar) and top_bar.by then 
+    top = top_bar.by / display.height 
+end
 
 	if top == state.margin_top and bottom == state.margin_bottom and
 		left == state.margin_left and right == state.margin_right then
@@ -558,6 +521,9 @@ function update_margins()
 	state.margin_left = left
 	state.margin_right = right
 
+	if utils.shared_script_property_set then
+		utils.shared_script_property_set('osc-margins', string.format('%f,%f,%f,%f', 0, 0, top, bottom))
+	end
 	mp.set_property_native('user-data/osc/margins', {l = left, r = right, t = top, b = bottom})
 
 	if not options.adjust_osd_margins then return end
@@ -619,6 +585,7 @@ function load_file_index_in_current_directory(index)
 			msg.error(error)
 			return
 		end
+
 		sort_strings(files)
 		if index < 0 then index = #files + index + 1 end
 
@@ -642,7 +609,6 @@ end
 
 --[[ STATE HOOKS ]]
 
-mp.observe_property('osc', 'bool', function(name, value) if value == true then mp.set_property('osc', 'no') end end)
 mp.register_event('file-loaded', function()
 	local path = normalize_path(mp.get_property_native('path'))
 	itable_delete_value(state.history, path)
@@ -765,6 +731,7 @@ mp.observe_property('demuxer-cache-state', 'native', function(prop, cache_state)
 		set_state('cache_duration', not cache_state.eof and cache_state['cache-duration'] or nil)
 	else
 		cached_ranges = {}
+		set_state('cache_underrun', false)
 	end
 
 	if not (state.duration and (#cached_ranges > 0 or state.cache == 'yes' or
@@ -850,27 +817,24 @@ end)
 bind_command('download-subtitles', open_subtitle_downloader)
 bind_command('load-subtitles', create_track_loader_menu_opener({
 	prop = 'sub',
-	title = ulang._import_id_menu .. ulang._sid_menu,
-	hint = ulang._sid_menu,
+	title = t('Load subtitles'),
 	loaded_message = t('Loaded subtitles'),
 	allowed_types = itable_join(config.types.video, config.types.subtitle),
 }))
 bind_command('load-audio', create_track_loader_menu_opener({
 	prop = 'audio',
-	title = ulang._import_id_menu .. ulang._aid_menu,
-	hint = ulang._aid_menu,
+	title = t('Load audio'),
 	loaded_message = t('Loaded audio'),
 	allowed_types = itable_join(config.types.video, config.types.audio),
 }))
 bind_command('load-video', create_track_loader_menu_opener({
 	prop = 'video',
-	title = ulang._import_id_menu .. ulang._vid_menu,
-	hint = ulang._vid_menu,
+	title = t('Load video'),
 	loaded_message = t('Loaded video'),
 	allowed_types = config.types.video,
 }))
 bind_command('subtitles', create_select_tracklist_type_menu_opener({
-	title = ulang._sid_submenu_title,
+	title = t('Subtitles'),
 	type = 'sub',
 	prop = 'sid',
 	enable_prop = 'sub-visibility',
@@ -878,24 +842,17 @@ bind_command('subtitles', create_select_tracklist_type_menu_opener({
 	load_command = 'script-binding uosc/load-subtitles',
 	download_command = 'script-binding uosc/download-subtitles',
 }))
---bind_command('subtitles', create_select_tracklist_type_menu_opener({ -- 旧版次字幕菜单
---	title = ulang._sid_sec_submenu_title,
---	type = 'sub',
---	prop = 'secondary-sid',
---	load_command = 'script-binding uosc/load-subtitles',
---	download_command = 'script-binding uosc/download-subtitles',
---}))
 bind_command('audio', create_select_tracklist_type_menu_opener({
-	title = ulang._aid_submenu_title, type = 'audio', prop = 'aid', load_command = 'script-binding uosc/load-audio',
+	title = t('Audio'), type = 'audio', prop = 'aid', load_command = 'script-binding uosc/load-audio',
 }))
 bind_command('video', create_select_tracklist_type_menu_opener({
-	title = ulang._vid_submenu_title, type = 'video', prop = 'vid', load_command = 'script-binding uosc/load-video',
+	title = t('Video'), type = 'video', prop = 'vid', load_command = 'script-binding uosc/load-video',
 }))
 bind_command('playlist', create_self_updating_menu_opener({
-	title = ulang._playlist_submenu_title,
+	title = t('Playlist'),
 	type = 'playlist',
 	list_prop = 'playlist',
-	footnote = ulang._playlist_submenu_footnote,
+	footnote = t('Paste path or url to add.') .. ' ' .. t('%s to reorder.', 'ctrl+up/down/pgup/pgdn/home/end'),
 	serializer = function(playlist)
 		local items = {}
 		local force_filename = mp.get_property_native('osd-playlist-entry') == 'filename'
@@ -926,7 +883,7 @@ bind_command('playlist', create_self_updating_menu_opener({
 	on_remove = function(event) mp.commandv('playlist-remove', tostring(event.value - 1)) end,
 }))
 bind_command('chapters', create_self_updating_menu_opener({
-	title = ulang._chapter_list_submenu_title,
+	title = t('Chapters'),
 	type = 'chapters',
 	list_prop = 'chapter-list',
 	active_prop = 'chapter',
@@ -946,16 +903,17 @@ bind_command('chapters', create_self_updating_menu_opener({
 	on_activate = function(event) mp.commandv('set', 'chapter', tostring(event.value - 1)) end,
 }))
 bind_command('editions', create_self_updating_menu_opener({
-	title = ulang._edition_list_submenu_title,
+	title = t('Editions'),
 	type = 'editions',
 	list_prop = 'edition-list',
 	active_prop = 'current-edition',
 	serializer = function(editions, current_id)
 		local items = {}
 		for _, edition in ipairs(editions or {}) do
+			local edition_id_1 = tostring(edition.id + 1)
 			items[#items + 1] = {
-				title = edition.title or ulang._edition_list_submenu_item_title,
-				hint = tostring(edition.id + 1),
+				title = edition.title or t('Edition %s', edition_id_1),
+				hint = edition_id_1,
 				value = edition.id,
 				active = edition.id == current_id,
 			}
@@ -983,7 +941,10 @@ bind_command('show-in-directory', function()
 end)
 bind_command('stream-quality', open_stream_quality_menu)
 bind_command('open-file', open_open_file_menu)
-bind_command('shuffle', function() set_state('shuffle', not state.shuffle) end)
+bind_command('shuffle', function()
+	set_state('shuffle', not state.shuffle)
+	mp.osd_message(state.shuffle and t('Shuffle ON') or t('Shuffle OFF'))
+end)
 bind_command('items', function()
 	if state.has_playlist then
 		mp.command('script-binding uosc/playlist')
@@ -1027,7 +988,7 @@ bind_command('menu-end', function() Elements:maybe('menu', 'navigate_by_items', 
 bind_command('menu-activate', function() Elements:maybe('menu', 'activate_selected_item') end)
 bind_command('menu-back', function() Elements:maybe('menu', 'back') end)
 bind_command('audio-device', create_self_updating_menu_opener({
-	title = ulang._audio_device_submenu_title,
+	title = t('Audio devices'),
 	type = 'audio-device-list',
 	list_prop = 'audio-device-list',
 	active_prop = 'audio-device',
@@ -1037,14 +998,12 @@ bind_command('audio-device', create_self_updating_menu_opener({
 		local items = {}
 		for _, device in ipairs(audio_device_list) do
 			if device.name == 'auto' or string.match(device.name, '^' .. ao) then
-				local title = device.description
-				if title == 'Autoselect device' then
-					title = ulang._audio_device_submenu_item_title
-				end
 				local hint = string.match(device.name, ao .. '/(.+)')
 				if not hint then hint = device.name end
 				items[#items + 1] = {
-					title = title,
+					title = device.description:sub(1, 7) == 'Default'
+						and t('Default %s', device.description:sub(9))
+						or device.description,
 					hint = hint,
 					active = device.name == current_device,
 					value = device.name,
@@ -1071,7 +1030,7 @@ bind_command('paste-to-playlist', function()
 		local payload = get_clipboard()
 		if payload then
 			mp.commandv('loadfile', payload, 'append')
-			mp.commandv('show-text', ulang._submenu_file_browser_label1 .. ': ' .. payload, 3000)
+			mp.commandv('show-text', t('Added to playlist') .. ': ' .. payload, 3000)
 		end
 	end
 end)
@@ -1079,7 +1038,7 @@ bind_command('copy-to-clipboard', function()
 	if state.path then
 		set_clipboard(state.path)
 	else
-		mp.commandv('show-text', ulang._clipboard_osd2, 3000)
+		mp.commandv('show-text', t('Nothing to copy'), 3000)
 	end
 end)
 bind_command('open-config-directory', function()
@@ -1105,37 +1064,6 @@ end)
 bind_command('update', function()
 	if not Elements:has('updater') then require('elements/Updater'):new() end
 end)
-
--- 菜单专用截屏
-mp.add_key_binding(nil, 'shot', function()
-	if Menu:is_open() then
-		local paused = mp.get_property_bool('pause')
-		local timeout = options.animation_duration/1000 + 0.2
-		if paused then
-			mp.add_timeout(timeout, function() -- 延迟过低可能产生闪烁
-				mp.command('screenshot window')
-			end)
-		else
-			options.pause_indicator = 'manual'
-			mp.set_property_bool('pause', true)
-			mp.add_timeout(timeout, function()
-				mp.command('screenshot window')
-				mp.set_property_bool('pause', false)
-			end)
-		end
-	else
-		mp.command('screenshot window')
-	end
-end)
-
--- 空闲自动弹出上下文菜单
-if type(options.idle_call_menu) == 'number' then
-	if options.idle_call_menu <= 2 and options.idle_call_menu > config.render_delay then
-		mp.observe_property('idle-active', 'bool', function(_, value)
-			if value == true then mp.add_timeout(options.idle_call_menu, function() if Menu:is_open() then return else mp.command('script-binding uosc/menu-blurred') end end) end
-		end)
-	end
-end
 
 --[[ MESSAGE HANDLERS ]]
 
@@ -1204,26 +1132,18 @@ mp.register_script_message('set-min-visibility', function(visibility, elements)
 	local ids = comma_split(elements and elements ~= '' and elements or 'timeline,controls,volume,top_bar')
 	if fraction then Elements:set_min_visibility(clamp(0, fraction, 1), ids) end
 end)
-mp.register_script_message('flash-elements', function(elements) Elements:flash(comma_split(elements)) end)
+mp.register_script_message('flash-elements', function(elements)
+    local ids = comma_split(elements)
+    local has_volume = false
+	for _, id in ipairs(ids) do if id == 'volume' then has_volume = true; break end end
+	if has_volume then table.insert(ids, 'volume_indicator') end
+    Elements:flash(ids)
+end)
 mp.register_script_message('overwrite-binding', function(name, command) key_binding_overwrites[name] = command end)
 mp.register_script_message('disable-elements', function(id, elements) Manager:disable(id, elements) end)
-if options.idlescreen then
-	mp.register_script_message('osc-idlescreen', function(mode, no_osd)
-		if mode == 'cycle' then mode = state.idlescreen and 'no' or 'yes' end
-		set_state('idlescreen', mode == 'yes')
-		mp.set_property_native('user-data/osc', { idlescreen = state.idlescreen })
-
-		if not no_osd and mp.get_property_number('osd-level', 1) >= 1 then
-			mp.osd_message('LOGO的可见性：' .. tostring(mode))
-		end
-	end)
-end
 
 --[[ ELEMENTS ]]
 
-if options.idlescreen then
-	require('elements/Logo'):new()
-end
 -- Dynamic elements
 local constructors = {
 	window_border = require('elements/WindowBorder'),
@@ -1232,11 +1152,14 @@ local constructors = {
 	top_bar = require('elements/TopBar'),
 	timeline = require('elements/Timeline'),
 	controls = options.controls and options.controls ~= 'never' and require('elements/Controls'),
-	volume = itable_index_of({'left', 'right'}, options.volume) and require('elements/Volume'),
 }
 
 -- Required elements
 require('elements/Curtain'):new()
+require('elements/VolumeIndicator'):new()
+require('elements/MuteIndicator'):new()
+require('elements/FullscreenIndicator'):new()
+require('elements/ExitFullscreenHint'):new()
 
 -- Element manager
 -- Handles creating and destroying elements based on disabled_elements user+script config.
@@ -1276,3 +1199,29 @@ end
 
 -- Initial commit
 Manager:disable('user', options.disable_elements)
+
+mp.add_key_binding('alt+l', 'load-danmaku', function()
+    local function on_file_selected(event)
+        -- 选择文件后，向弹幕脚本发送加载消息
+        mp.commandv('script-message-to', 'uosc_danmaku', 'load-danmaku-file', event.value)
+        -- 关闭当前菜单（类型为 'load-danmaku'）
+        local menu = Menu:is_open('load-danmaku')
+        if menu then menu:close() end
+    end
+
+    -- 确定起始目录（优先使用当前播放文件所在目录）
+    local start_dir = options.default_directory
+    if state.path and not is_protocol(state.path) then
+        local serialized = serialize_path(state.path)
+        if serialized and serialized.dirname then
+            start_dir = serialized.dirname
+        end
+    end
+
+    -- 打开文件导航菜单，仅允许选择 .xml 或 .json 弹幕文件
+    open_file_navigation_menu(start_dir, on_file_selected, {
+        type = 'load-danmaku',
+        title = '选择弹幕文件',
+        allowed_types = {'xml', 'json'},
+    })
+end)

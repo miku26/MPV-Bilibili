@@ -25,10 +25,13 @@ function CycleButton:init(id, props)
 	local is_state_prop = itable_index_of({'shuffle'}, props.prop)
 	self.prop = props.prop
 	self.states = props.states
+	self.state_tooltips = props.state_tooltips or {}
 
 	Button.init(self, id, props)
 
-	self.icon = self.states[1].icon
+	-- 【修复核心】保存传入的默认图标
+	self.default_icon = props.icon
+	self.icon = props.icon or self.states[1].icon
 	self.active = self.states[1].active
 	self.current_state_index = 1
 	self.on_click = function()
@@ -60,8 +63,24 @@ function CycleButton:init(id, props)
 		value = type(value) == 'boolean' and (value and 'yes' or 'no') or tostring(value or '')
 		local index = itable_find(self.states, function(state) return state.value == value end)
 		self.current_state_index = index or 1
-		self.icon = self.states[self.current_state_index].icon
-		self.active = self.states[self.current_state_index].active
+		
+		-- 【修复核心】当前状态的图标
+		local current_state = self.states[self.current_state_index]
+
+		-- 如果状态的图标等于状态值(如 'no')，并且存在默认图标，则使用默认图标代替
+		if current_state.icon == current_state.value and self.default_icon then
+			self.icon = self.default_icon
+		else
+			self.icon = current_state.icon
+		end
+
+		self.active = current_state.active
+		
+		-- 更新 tooltip
+		local tooltip = self.state_tooltips[value]
+		if tooltip then
+			self.tooltip = tooltip
+		end
 		request_render()
 	end
 

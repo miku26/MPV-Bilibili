@@ -130,9 +130,11 @@ function ass_mt:tooltip(element, value, opts)
 
 	-- Draw
 	local ax, ay, bx, by = round(x - width_half), round(y - height_half), round(x + width_half), round(y + height_half)
-	self:rect(ax, ay, bx, by, {
-		color = opts.invert_colors and fg or bg, opacity = config.opacity.tooltip, radius = state.radius
-	})
+	if opts.background ~= false then
+        self:rect(ax, ay, bx, by, {
+            color = opts.invert_colors and fg or bg, opacity = config.opacity.tooltip, radius = state.radius
+        })
+    end
 	local func = opts.timestamp and self.timestamp or self.txt
 	func(self, x, y, 5, tostring(value), opts)
 	return {ax = element.ax, ay = ay, bx = element.bx, by = by}
@@ -251,7 +253,7 @@ function ass_mt:texture(ax, ay, bx, by, char, opts)
 	for i = 1, math.ceil(height / tile_size), 1 do lines = lines .. (lines == '' and '' or '\\N') .. line end
 	self:txt(
 		x, y, 7, lines,
-		{font = '', size = tile_size, color = opts.color, bold = false, opacity = opacity, clip = clip})
+		{font = 'uosc_textures', size = tile_size, color = opts.color, bold = false, opacity = opacity, clip = clip})
 end
 
 -- Rotating spinner icon.
@@ -265,4 +267,48 @@ function ass_mt:spinner(x, y, size, opts)
 	opts.color = opts.color or fg
 	self:icon(x, y, size, 'autorenew', opts)
 	request_render()
+end
+
+-- Renders a smooth curve from Bezier segments.
+---@param ax number
+---@param ay number
+---@param bx number
+---@param by number
+---@param points number[] Flat table of normalized points (0–1): start point followed by segment entries cp1x, cp1y, cp2x, cp2y, px, py, ...
+---@param opts? {color?: string; border?: number; border_color?: string; opacity?: number|{primary?: number; border?: number, shadow?: number, main?: number}; clip?: string}
+function ass_mt:smooth_curve(ax, ay, bx, by, points, opts)
+	if not points or #points < 8 then return end
+	opts = opts or {}
+	local border_size = opts.border or 0
+	local tags = '\\pos(0,0)\\rDefault\\an7\\blur0'
+	-- border
+	tags = tags .. '\\bord' .. border_size
+	-- colors
+	tags = tags .. '\\1c&H' .. (opts.color or fg)
+	if border_size > 0 then tags = tags .. '\\3c&H' .. (opts.border_color or bg) end
+	-- opacity
+	if opts.opacity then tags = tags .. self.opacity(nil, opts.opacity) end
+	-- clip
+	if opts.clip then tags = tags .. opts.clip end
+	-- draw
+	self:new_event()
+	self.text = self.text .. '{' .. tags .. '}'
+	self:draw_start()
+
+	-- Scale normalized (0–1) coordinates to rectangle bounds
+	local width, height = bx - ax, by - ay
+	local function scale(x, y)
+		return ax + x * width, ay + y * height
+	end
+
+	local x0, y0 = scale(points[1], points[2])
+	self:move_to(x0, y0)
+	local max = math.floor((#points - 2) / 6) * 6 + 2
+	for i = 3, max, 6 do
+		local x1, y1 = scale(points[i],   points[i+1])
+		local x2, y2 = scale(points[i+2], points[i+3])
+		local x3, y3 = scale(points[i+4], points[i+5])
+		self:bezier_curve(x1, y1, x2, y2, x3, y3)
+	end
+	self:draw_stop()
 end

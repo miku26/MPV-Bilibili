@@ -1,8 +1,16 @@
 local Element = require('elements/Element')
 local Button = require('elements/Button')
+local Chapter = require('elements/Chapter')
 local CycleButton = require('elements/CycleButton')
 local ManagedButton = require('elements/ManagedButton')
 local Speed = require('elements/Speed')
+local Time = require('elements/Time')
+local Volume = require('elements/Volume')
+local PlayMode = require('elements/PlayMode')
+local Episode = require('elements/Episode')
+local Subtitle = require('elements/Subtitle')
+local Audio = require('elements/Audio')
+local DanmakuStyles = require('elements/DanmakuStyles')
 
 -- sizing:
 --   static - shrink, have highest claim on available space, disappear when there's not enough of it
@@ -19,13 +27,63 @@ local Controls = class(Element)
 
 function Controls:new() return Class.new(self) --[[@as Controls]] end
 function Controls:init()
-	Element.init(self, 'controls', {render_order = 6})
+	Element.init(self, 'controls', {render_order = 5.5})
 	---@type ControlItem[] All control elements serialized from `options.controls`.
 	self.controls = {}
 	---@type ControlItem[] Only controls that match current dispositions.
 	self.layout = {}
 
 	self:init_options()
+end
+
+function Controls:render()
+    local visibility = self:get_visibility()
+    if visibility <= 0 then return end
+
+    -- 1. 注册空白 zone（覆盖整个控制栏）
+    cursor:zone('primary_click', self, function() end)
+
+    -- 2. 为每个可见的按钮元素重新注册 zone（后注册覆盖空白 zone）
+    for _, control in ipairs(self.layout) do
+        local element = control.element
+        if element and not control.hide then
+            -- 确保元素有坐标（由 update_dimensions 设置）
+            if element.ax and element.bx and element.ay and element.by then
+                -- 获取该元素的点击处理函数（不同元素不同，需兼容）
+                local handler = nil
+                if element.on_click then
+                    handler = element.on_click
+                elseif element.toggle then
+                    handler = function() element:toggle() end
+                elseif element.prop then
+                    -- CycleButton 有自己的处理逻辑，可调用其 toggle 或 click 方法
+                    handler = function() element:cycle() end
+                end
+                if handler then
+                    -- 用元素自身作为 id，覆盖之前注册的 zone
+                    cursor:zone('primary_click', element, handler, element.ax, element.ay, element.bx, element.by)
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+---@param index integer 控件在 self.controls 中的索引
+---@param new_ratio number 新的宽高比
+function Controls:update_control_ratio(index, new_ratio)
+    local control = self.controls[index]
+    if not control or control.sizing ~= 'static' and control.sizing ~= 'dynamic' then
+        return
+    end
+    if control.ratio ~= new_ratio then
+        control.ratio = new_ratio
+        if control.sizing == 'dynamic' then
+            control.ratio_min = new_ratio
+        end
+        self:reflow()
+    end
 end
 
 function Controls:destroy()
@@ -36,43 +94,28 @@ end
 function Controls:init_options()
 	-- Serialize control elements
 	local shorthands = {
-		menu               = 'command:menu:script-binding uosc/menu-blurred?' .. ulang._button01,
-		subtitles          = 'command:subtitles:script-binding uosc/subtitles#sub>0?' .. ulang._button02,
-		audio              = 'command:graphic_eq:script-binding uosc/audio#audio>1?' .. ulang._button03,
-		['audio-device']   = 'command:speaker:script-binding uosc/audio-device?' .. ulang._button04,
-		video              = 'command:theaters:script-binding uosc/video#video>1?' .. ulang._button05,
-		playlist           = 'command:list_alt:script-binding uosc/playlist?' .. ulang._button06,
-		chapters           = 'command:bookmark:script-binding uosc/chapters#chapters>0?' .. ulang._button07,
-		editions           = 'command:bookmarks:script-binding uosc/editions#editions>1?' .. ulang._button08,
-		['stream-quality'] = 'command:high_quality:script-binding uosc/stream-quality?' .. ulang._button09,
-		['open-file']      = 'command:file_open:script-binding uosc/open-file?' .. ulang._button10,
-		items              = 'command:list_alt:script-binding uosc/items?' .. ulang._button11,
-		prev               = 'command:arrow_back_ios:script-binding uosc/prev?' .. ulang._button12,
-		['next']           = 'command:arrow_forward_ios:script-binding uosc/next?' .. ulang._button13,
-		first              = 'command:first_page:script-binding uosc/first?' .. ulang._button14,
-		last               = 'command:last_page:script-binding uosc/last?' .. ulang._button15,
-		['loop-playlist']  = 'cycle:repeat:loop-playlist:no/inf!?' .. ulang._button16,
-		['loop-file']      = 'cycle:repeat_one:loop-file:no/inf!?' .. ulang._button17,
-		shuffle            = 'toggle:shuffle:shuffle?' .. ulang._button18,
-		autoload           = 'toggle:hdr_auto:autoload@uosc?' .. ulang._button19,
-		fullscreen         = 'cycle:crop_free:fullscreen:no/yes=fullscreen_exit!?' .. ulang._button20,
-
-		-- 自定义的捷径
-		['play_pause']     = 'cycle:not_started:pause:no=play_circle/yes=pause_circle?' .. ulang._button_ext01,
-		['pause_play']     = 'cycle:not_started:pause:no=pause_circle/yes=play_circle?' .. ulang._button_ext02,
-		['pl-prev']        = 'command:navigate_before:playlist-prev?' .. ulang._button_ext03,
-		['pl-next']        = 'command:navigate_next:playlist-next?' .. ulang._button_ext04,
-		border             = 'toggle:border_style:border?' .. ulang._button_ext05,
-		ontop              = 'cycle:move_up:ontop:no/yes!?' .. ulang._button_ext06,
-		hwdec              = 'cycle:developer_board_off:hwdec:no=developer_board_off/yes=memory/auto-copy=developer_board?' .. ulang._button_ext07,
-		unscaled           = 'cycle:fit_screen:video-unscaled:no/yes!?' .. ulang._button_ext08,
-		deband             = 'cycle:texture:deband:no/yes!?' .. ulang._button_ext09,
-		deint              = 'cycle:autofps_select:deinterlace:no=align_horizontal_center/yes=clear_all/auto=autofps_select?' .. ulang._button_ext10,
-		['shot-vid']       = 'command:screenshot:screenshot video?' .. ulang._button_ext11,
-
-		['ST-stats_tog']   = 'command:info_outline:script-binding display-stats-toggle?' .. ulang._button_ext12,
-		['ST-thumb_tog']   = 'command:panorama:script-binding thumb_toggle?' .. ulang._button_ext13,
-
+		['play-pause'] = 'cycle:pause:pause:no=pause/yes=play_arrow?' .. t('Play/Pause'),
+		menu = 'command:menu:script-binding uosc/menu-blurred?' .. t('Menu'),
+		subtitles = 'command:subtitles:script-binding uosc/subtitles#sub>0?' .. t('Subtitles'),
+		audio = 'command:graphic_eq:script-binding uosc/audio#audio>1?' .. t('Audio'),
+		['audio-device'] = 'command:speaker:script-binding uosc/audio-device?' .. t('Audio device'),
+		video = 'command:theaters:script-binding uosc/video#video>1?' .. t('Video'),
+		playlist = 'command:list_alt:script-binding uosc/playlist?' .. t('Playlist'),
+		chapters = 'command:bookmark:script-binding uosc/chapters#chapters>0?' .. t('Chapters'),
+		['editions'] = 'command:bookmarks:script-binding uosc/editions#editions>1?' .. t('Editions'),
+		['stream-quality'] = 'command:high_quality:script-binding uosc/stream-quality?' .. t('Stream quality'),
+		['open-file'] = 'command:file_open:script-binding uosc/open-file?' .. t('Open file'),
+		['items'] = 'command:list_alt:script-binding uosc/items?' .. t('Playlist/Files'),
+		prev = 'command:skip_previous:script-binding uosc/prev?' .. t('上一个 ([)'),
+		next = 'command:skip_next:script-binding uosc/next?' .. t('下一个 (])'),
+		first = 'command:first_page:script-binding uosc/first?' .. t('First'),
+		last = 'command:last_page:script-binding uosc/last?' .. t('Last'),
+		['loop-playlist'] = 'cycle:repeat:loop-playlist:no/inf!?' .. t('Loop playlist'),
+		['loop-file'] = 'cycle:repeat_one:loop-file:no/inf!?' .. t('Loop file'),
+		shuffle = 'toggle:shuffle:shuffle?' .. t('Shuffle'),
+		autoload = 'toggle:hdr_auto:autoload@uosc?' .. t('Autoload'),
+		fullscreen = 'cycle:fullscreen:fullscreen:no/yes?',
+		danmaku_toggle = 'cycle:show_danmaku@uosc_danmaku:on=speaker_notes/off=speaker_notes_off?' .. t('Toggle danmaku'),
 	}
 
 	-- Parse out disposition/config pairs
@@ -146,61 +189,120 @@ function Controls:init_options()
 		elseif kind == 'gap' then
 			table_assign(control, {sizing = 'gap', scale = 1, ratio = params[1] or 0.3, ratio_min = 0})
 		elseif kind == 'command' then
-			if #params ~= 2 then
-				mp.error(string.format(
-					'command button needs 2 parameters, %d received: %s', #params, table.concat(params, '/')
-				))
-			else
-				local element = Button:new('control_' .. i, {
-					render_order = self.render_order,
-					icon = params[1],
-					anchor_id = 'controls',
-					on_click = function() mp.command(params[2]) end,
-					tooltip = tooltip,
-					count_prop = 'sub',
-				})
-				table_assign(control, {element = element, sizing = 'static', scale = 1, ratio = 1})
-				if badge then self:register_badge_updater(badge, element) end
-			end
+            if #params ~= 2 then
+                mp.msg.error(string.format(
+                    'command button needs 2 parameters, %d received: %s', #params, table.concat(params, '/')
+                ))
+            else
+                local icon = params[1]
+                local command = params[2]
+                local is_chapter = command == 'script-binding uosc/chapters'
+                local is_subtitles = command == 'script-binding uosc/subtitles'
+                local is_audio = command == 'script-binding uosc/audio'
+
+                if is_chapter then
+                    local element = Chapter:new('control_' .. i, {
+                        render_order = self.render_order,
+                        anchor_id = 'controls',
+                        tooltip = tooltip or t('章节'),
+                    })
+                    table_assign(control, {element = element, sizing = 'static', scale = 1, ratio = 1})
+                    if badge then self:register_badge_updater(badge, element) end
+                elseif is_subtitles then
+                    local element = Subtitle:new('control_' .. i, {
+                        render_order = self.render_order,
+                        anchor_id = 'controls',
+                        tooltip = tooltip or t('字幕'),
+                    })
+                    table_assign(control, {element = element, sizing = 'static', scale = 1, ratio = 1})
+                    if badge then self:register_badge_updater(badge, element) end
+                elseif is_audio then
+                    local element = Audio:new('control_' .. i, {
+                        render_order = self.render_order,
+                        anchor_id = 'controls',
+                        tooltip = tooltip or t('音轨'),
+                    })
+                    table_assign(control, {element = element, sizing = 'static', scale = 1, ratio = 1})
+                    if badge then self:register_badge_updater(badge, element) end
+                else
+                    local element = Button:new('control_' .. i, {
+                        render_order = self.render_order,
+                        icon = icon,
+                        anchor_id = 'controls',
+                        on_click = function() mp.command(command) end,
+                        tooltip = tooltip,
+                        count_prop = 'sub',
+                    })
+                    table_assign(control, {element = element, sizing = 'static', scale = 1, ratio = 1})
+                    if badge then self:register_badge_updater(badge, element) end
+                end
+            end
 		elseif kind == 'cycle' then
-			if #params ~= 3 then
-				mp.error(string.format(
-					'cycle button needs 3 parameters, %d received: %s',
+			local prop, states_def
+			if #params == 3 then
+				local icon = params[1]
+				prop = params[2]
+				states_def = params[3]
+			elseif #params == 2 then
+				prop = params[1]
+				states_def = params[2]
+			else
+				mp.msg.error(string.format(
+					'cycle button needs 2 or 3 parameters, %d received: %s',
 					#params, table.concat(params, '/')
 				))
-			else
-				local state_configs = split(params[3], ' */ *')
-				local states = {}
-
-				for _, state_config in ipairs(state_configs) do
-					local active = false
-					if state_config:sub(-1) == '!' then
-						active = true
-						state_config = state_config:sub(1, -2)
-					end
-					local state_params = split(state_config, ' *= *')
-					local value, icon = state_params[1], state_params[2] or params[1]
-					states[#states + 1] = {value = value, icon = icon, active = active}
-				end
-
-				local element = CycleButton:new('control_' .. i, {
-					render_order = self.render_order,
-					prop = params[2],
-					anchor_id = 'controls',
-					states = states,
-					tooltip = tooltip,
-				})
-				table_assign(control, {element = element, sizing = 'static', scale = 1, ratio = 1})
-				if badge then self:register_badge_updater(badge, element) end
+				goto continue
 			end
+			local state_configs = split(states_def, ' */ *')
+			local states = {}
+			local default_icon = nil
+			for _, state_config in ipairs(state_configs) do
+				local active = false
+				if state_config:sub(-1) == '!' then
+					active = true
+					state_config = state_config:sub(1, -2)
+				end
+				local state_params = split(state_config, ' *= *')
+				local value, icon = state_params[1], state_params[2]
+				if not icon then icon = value end
+				if not default_icon then default_icon = icon end
+				states[#states + 1] = {value = value, icon = icon, active = active}
+			end
+			local state_tooltips = nil
+			if prop == 'show_danmaku@uosc_danmaku' then
+				state_tooltips = {
+					on  = '关闭弹幕 (d)',
+					off = '开启弹幕 (d)',
+				}
+			elseif prop == 'fullscreen' then
+				state_tooltips = {
+					['no']  = '进入全屏 (f)',
+					['yes'] = '退出全屏 (f)',
+				}
+				tooltip = nil
+			end
+			local args = {
+				render_order = self.render_order,
+				prop = prop,
+				anchor_id = 'controls',
+				states = states,
+				state_tooltips = state_tooltips,
+			}
+			if #params == 3 then
+				args.icon = params[1]
+			end
+			local element = CycleButton:new('control_' .. i, args)
+			table_assign(control, {element = element, sizing = 'static', scale = 1, ratio = 1})
+			if badge then self:register_badge_updater(badge, element) end
 		elseif kind == 'button' then
 			if #params ~= 1 then
-				mp.error(string.format(
+				mp.msg.error(string.format(
 					'managed button needs 1 parameter, %d received: %s', #params, table.concat(params, '/')
 				))
 			else
+				local name = params[1]
 				local element = ManagedButton:new('control_' .. i, {
-					name = params[1],
+					name = name,
 					render_order = self.render_order,
 					anchor_id = 'controls',
 					on_hide = function() self:reflow() end,
@@ -210,17 +312,55 @@ function Controls:init_options()
 		elseif kind == 'speed' then
 			if not Elements.speed then
 				local element = Speed:new({anchor_id = 'controls', render_order = self.render_order})
-				local scale = tonumber(params[1]) or 1.3
+				local scale = tonumber(params[1]) or 1
 				table_assign(control, {
-					element = element, sizing = 'dynamic', scale = scale, ratio = 3.5, ratio_min = 2,
+					element = element, sizing = 'dynamic', scale = 1, ratio = 1.2, ratio_min = 1.2,
 				})
 			else
 				msg.error('there can only be 1 speed slider')
 			end
+		elseif kind == 'time' then
+			local element = Time:new({
+				anchor_id = 'controls',
+				render_order = self.render_order,
+			})
+			-- control_index 属性，指向自身在 control 列表中的位置
+			local control_index = #self.controls + 1
+			element.control_index = control_index
+			table_assign(control, {element = element, sizing = 'dynamic', scale = 1, ratio = 2, ratio_min = 1.5,})
+		elseif kind == 'volume' then
+			local element = Volume:new('control_' .. i, {
+				render_order = self.render_order,
+				anchor_id = 'controls',
+				tooltip = tooltip or t('Volume'),
+			})
+			table_assign(control, {element = element, sizing = 'static', scale = 1, ratio = 1})
+		elseif kind == 'play-mode' then
+			local element = PlayMode:new('control_' .. i, {
+				render_order = self.render_order,
+				anchor_id = 'controls',
+				tooltip = tooltip,
+			})
+			table_assign(control, {element = element, sizing = 'static', scale = 1, ratio = 1})
+		elseif kind == 'episode' then
+			local element = Episode:new('control_' .. i, {
+				render_order = self.render_order,
+				anchor_id = 'controls',
+				tooltip = tooltip or t('选集'),
+			})
+			table_assign(control, {element = element, sizing = 'static', scale = 1, ratio = 1})
+		elseif kind == 'danmaku_styles' then
+			local element = DanmakuStyles:new('control_' .. i, {
+				render_order = self.render_order,
+				anchor_id = 'controls',
+				tooltip = t('弹幕设置'),
+			})
+			table_assign(control, {element = element, sizing = 'static', scale = 1, ratio = 1})
 		else
 			msg.error('unknown element kind "' .. kind .. '"')
 			break
 		end
+		::continue::
 
 		if control.element then
 			for _, prop in ipairs(disposition_props) do
@@ -240,12 +380,10 @@ function Controls:reflow()
 		local matches = false
 		local conditions_num = 0
 
-		-- Check against OR groups of AND conditions
 		for _, group in pairs(control.dispositions) do
 			local group_matches = true
 			for prop, value in pairs(group) do
 				conditions_num = conditions_num + 1
-				---@type boolean
 				local current_value
 				if prop:sub(1, 4) == 'has_' or prop:sub(1, 3) == 'is_' then
 					current_value = state[prop]
@@ -273,8 +411,6 @@ function Controls:reflow()
 	Elements:trigger('controls_reflow')
 end
 
----@param badge string
----@param element Element An element that supports `badge` property.
 function Controls:register_badge_updater(badge, element)
 	local prop_and_limit = split(badge, ' *> *')
 	local prop, limit = prop_and_limit[1], tonumber(prop_and_limit[2] or -1)
@@ -289,13 +425,12 @@ function Controls:register_badge_updater(badge, element)
 		end
 	else
 		local parts = split(prop, '@')
-		-- Support both new `prop@owner` and old `@prop` syntaxes
 		if #parts > 1 then prop, is_external_prop = parts[1] ~= '' and parts[1] or parts[2], true end
 		serializer = function(value) return value and (type(value) == 'table' and #value or tostring(value)) or nil end
 	end
 
 	local function handler(_, value)
-		local new_value = serializer(value) --[[@as nil|string|integer]]
+		local new_value = serializer(value)
 		local value_number = tonumber(new_value)
 		if value_number then new_value = value_number > limit and value_number or nil end
 		element.badge = new_value
@@ -320,12 +455,10 @@ function Controls:update_dimensions()
 	local spacing = round(options.controls_spacing * state.scale)
 	local margin = round(options.controls_margin * state.scale)
 
-	-- Disable when not enough space
 	local available_space = display.height - window_border * 2 - Elements:v('top_bar', 'size', 0)
 		- Elements:v('timeline', 'size', 0)
 	self.enabled = available_space > size + 10
 
-	-- Reset hide/enabled flags
 	for c, control in ipairs(self.layout) do
 		control.hide = false
 		if control.element then control.element.enabled = self.enabled end
@@ -333,17 +466,14 @@ function Controls:update_dimensions()
 
 	if not self.enabled then return end
 
-	-- Container
 	self.bx = display.width - window_border - margin
 	self.by = Elements:v('timeline', 'ay', display.height - window_border) - margin
 	self.ax, self.ay = window_border + margin, self.by - size
 
-	-- Controls
 	local available_width, statics_width = self.bx - self.ax, 0
 	local min_content_width = statics_width
 	local max_dynamics_width, dynamic_units, spaces, gaps = 0, 0, 0, 0
 
-	-- Calculate statics_width, min_content_width, and count spaces & gaps
 	for c, control in ipairs(self.layout) do
 		if control.sizing == 'space' then
 			spaces = spaces + 1
@@ -362,7 +492,6 @@ function Controls:update_dimensions()
 		end
 	end
 
-	-- Hide & disable elements in the middle until we fit into available width
 	if min_content_width > available_width then
 		local i = math.ceil(#self.layout / 2 + 0.1)
 		for a = 0, #self.layout - 1, 1 do
@@ -388,20 +517,63 @@ function Controls:update_dimensions()
 		end
 	end
 
-	-- Lay out the elements
 	local current_x = self.ax
 	local width_for_dynamics = available_width - statics_width
 	local empty_space_width = width_for_dynamics - max_dynamics_width
 	local width_for_gaps = math.min(empty_space_width, size * gaps)
-	local individual_space_width = spaces > 0 and ((empty_space_width - width_for_gaps) / spaces) or 0
 
+	local space_widths = {}
+	if spaces == 2 then
+		local section = 1
+		local section_widths = {0, 0, 0}
+		for c, control in ipairs(self.layout) do
+			if not control.hide then
+				if control.sizing == 'space' then
+					section = section + 1
+				else
+					local w = 0
+					if control.sizing == 'gap' then
+						if width_for_gaps > 0 then w = width_for_gaps * (control.ratio / gaps) end
+					elseif control.sizing == 'static' then
+						w = size * control.scale * control.ratio + (c ~= #self.layout and spacing or 0)
+					elseif control.sizing == 'dynamic' then
+						local height = size * control.scale
+						w = (max_dynamics_width < width_for_dynamics
+							and height * control.ratio or width_for_dynamics * ((control.scale * control.ratio) / dynamic_units))
+							+ (c ~= #self.layout and spacing or 0)
+					end
+					section_widths[section] = section_widths[section] + w
+				end
+			end
+		end
+		local left_w, middle_w = section_widths[1], section_widths[2]
+		local total_space = empty_space_width - width_for_gaps
+		local space1 = (available_width - middle_w) / 2 - left_w + spacing / 2
+		local space2 = total_space - space1
+		if space1 < 0 then
+			space2 = space2 + space1
+			space1 = 0
+		elseif space2 < 0 then
+			space1 = space1 + space2
+			space2 = 0
+		end
+		if space1 < 0 then space1 = 0 end
+		if space2 < 0 then space2 = 0 end
+		space_widths = {space1, space2}
+	else
+		local individual_space_width = spaces > 0 and ((empty_space_width - width_for_gaps) / spaces) or 0
+		for i = 1, spaces do space_widths[i] = individual_space_width end
+	end
+
+	local space_index = 0
 	for c, control in ipairs(self.layout) do
 		if not control.hide then
 			local sizing, element, scale, ratio = control.sizing, control.element, control.scale, control.ratio
 			local width, height = 0, 0
 
 			if sizing == 'space' then
-				if individual_space_width > 0 then width = individual_space_width end
+				space_index = space_index + 1
+				width = space_widths[space_index] or 0
 			elseif sizing == 'gap' then
 				if width_for_gaps > 0 then width = width_for_gaps * (ratio / gaps) end
 			elseif sizing == 'static' then
