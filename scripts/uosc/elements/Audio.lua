@@ -209,16 +209,11 @@ function Audio:get_panel_rect()
 
     local center_x = (self.ax + self.bx) / 2
     local panel_x = center_x - total_width / 2
-    local panel_y = self.ay - final_height - 8
+    local timeline_ay = Elements:v('timeline', 'ay', display.height)
+	local panel_y = timeline_ay - 16 - final_height
+	if panel_y < 0 then panel_y = 0 end
 
-    if panel_y < 0 then
-        panel_y = self.by + 8
-        if panel_y + final_height > display.height - 8 then
-            panel_y = display.height - final_height - 8
-        end
-    end
-
-    panel_x = math.max(8, math.min(panel_x, display.width - total_width - 8))
+	panel_x = math.max(8, math.min(panel_x, display.width - total_width - 8))
 
     return {
         ax = panel_x,
@@ -239,21 +234,24 @@ function Audio:get_panel_rect()
         _audio_tracks = audio_tracks,
         _max_left_total = max_left_total,
         _max_right_width = max_right_width,
-        _left_origin = panel_x + padding_h,            -- 左侧文本起始x
-        _right_origin = panel_x + total_width - padding_h, -- 右侧文本右对齐基准x
+        _left_origin = panel_x + padding_h,
+        _right_origin = panel_x + total_width - padding_h,
     }
 end
 
--- 允许的音频文件扩展名（小写）
 local AUDIO_EXTENSIONS = {
-    'mp3', 'm4a', 'aac', 'flac', 'wav', 'ogg', 'opus', 'wma', 'ac3', 'dts', 'eac3', 'truehd'
+    'mp3', 'aac', 'mka', 'dts', 'flac', 'ogg', 'm4a', 'ac3', 'opus', 'wav', 'wv', 'eac3', 'thd',
+    'ape', 'wma', 'm4b', 'mp2', 'tta', 'tak', 'dsf', 'dff'
 }
 
 function Audio:load_audio_file()
     local function handle_activate(event)
-        mp.commandv('audio-add', event.value, 'cached')
-        mp.commandv('set', 'audio', 'auto')
-        self:close_panel()
+		mp.commandv('script-binding', 'uosc/menu-esc')
+		self:close_panel()
+		mp.add_timeout(0.05, function()
+		mp.commandv('audio-add', event.value, 'cached')
+		mp.commandv('set', 'audio', 'auto')
+        end)
     end
 
     local directory = options.default_directory

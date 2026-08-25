@@ -17,9 +17,9 @@ function DanmakuStyles:init(id, props)
     Element.init(self, id, props)
     self.tooltip = props.tooltip or '弹幕设置'
     self.panel_open = false
-    self.font_picker_open = false   -- 控制下拉菜单展开/收起
-    self.font_scroll_offset = 0     -- 字体下拉列表滚动偏移量
-    self.font_close_timer = nil     -- 关闭下拉菜单的延迟定时器
+    self.font_picker_open = false
+    self.font_scroll_offset = 0
+    self.font_close_timer = nil
     self.hide_timer = nil
     self.font_size = 0
 
@@ -266,14 +266,11 @@ function DanmakuStyles:get_panel_rect()
 		panel_height = gap + h_title + gap + h_label + gap + h_input + gap + h_label + gap + h_input + gap*2 + h_input + pad * 1.6
     end
 
-	local panel_y = self.ay - panel_height - 20
-    if panel_y < 20 then
-        panel_y = self.by + 20
-        if panel_y + panel_height > display.height - 20 then
-            panel_y = 20
-        end
-    end
-    panel_x = math.max(20, math.min(panel_x, display.width - total_width - 20))
+	local timeline_ay = Elements:v('timeline', 'ay', display.height)
+	local panel_y = timeline_ay - 16 - panel_height
+	if panel_y < 0 then panel_y = 0 end
+
+	panel_x = math.max(8, math.min(panel_x, display.width - total_width - 8))
 
 	return {
         ax = panel_x, ay = panel_y,

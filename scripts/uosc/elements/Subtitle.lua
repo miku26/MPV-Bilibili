@@ -116,14 +116,11 @@ function Subtitle:get_panel_rect()
 
     local center_x = (self.ax + self.bx) / 2
     local panel_x = center_x - total_width / 2
-    local panel_y = self.ay - final_height - 8
-    if panel_y < 0 then
-        panel_y = self.by + 8
-        if panel_y + final_height > display.height - 8 then
-            panel_y = display.height - final_height - 8
-        end
-    end
-    panel_x = math.max(8, math.min(panel_x, display.width - total_width - 8))
+    local timeline_ay = Elements:v('timeline', 'ay', display.height)
+	local panel_y = timeline_ay - 16 - final_height
+	if panel_y < 0 then panel_y = 0 end
+
+	panel_x = math.max(8, math.min(panel_x, display.width - total_width - 8))
 
     return {
         ax = panel_x,
@@ -323,9 +320,14 @@ function Subtitle:draw_panel(ass, rect)
             by = item_by,
         }, function()
             if is_load then
-                local function handle_activate(event)
-                    load_track('sub', event.value)
-                    self:close_panel()
+				local function handle_activate(event)
+					mp.commandv('script-binding', 'uosc/menu-esc')
+					-- 2. 关闭字幕面板
+					self:close_panel()
+					-- 3. 延迟加载字幕，确保菜单已关闭
+					mp.add_timeout(0.05, function()
+					load_track('sub', event.value)
+				end)
                 end
                 local start_dir = options.default_directory
                 if state.path and not is_protocol(state.path) then

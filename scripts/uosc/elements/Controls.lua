@@ -27,7 +27,7 @@ local Controls = class(Element)
 
 function Controls:new() return Class.new(self) --[[@as Controls]] end
 function Controls:init()
-	Element.init(self, 'controls', {render_order = 5.5})
+	Element.init(self, 'controls', {render_order = 4})
 	---@type ControlItem[] All control elements serialized from `options.controls`.
 	self.controls = {}
 	---@type ControlItem[] Only controls that match current dispositions.
@@ -40,27 +40,34 @@ function Controls:render()
     local visibility = self:get_visibility()
     if visibility <= 0 then return end
 
-    -- 1. 注册空白 zone（覆盖整个控制栏）
+    -- 1. 保护 Controls 自身区域（空白）
     cursor:zone('primary_click', self, function() end)
 
-    -- 2. 为每个可见的按钮元素重新注册 zone（后注册覆盖空白 zone）
+    -- 2. 保护底部间隙（如果存在）
+    if self.by < display.height then
+        local gap_rect = {
+            ax = self.ax,
+            ay = self.by,
+            bx = self.bx,
+            by = display.height
+        }
+        cursor:zone('primary_click', gap_rect, function() end)
+    end
+
+    -- 3. 注册各个按钮的交互 zone（后注册会覆盖上面的空白 zone）
     for _, control in ipairs(self.layout) do
         local element = control.element
         if element and not control.hide then
-            -- 确保元素有坐标（由 update_dimensions 设置）
             if element.ax and element.bx and element.ay and element.by then
-                -- 获取该元素的点击处理函数（不同元素不同，需兼容）
                 local handler = nil
                 if element.on_click then
                     handler = element.on_click
                 elseif element.toggle then
                     handler = function() element:toggle() end
                 elseif element.prop then
-                    -- CycleButton 有自己的处理逻辑，可调用其 toggle 或 click 方法
                     handler = function() element:cycle() end
                 end
                 if handler then
-                    -- 用元素自身作为 id，覆盖之前注册的 zone
                     cursor:zone('primary_click', element, handler, element.ax, element.ay, element.bx, element.by)
                 end
             end
@@ -456,19 +463,19 @@ function Controls:update_dimensions()
 	local margin = round(options.controls_margin * state.scale)
 
 	local available_space = display.height - window_border * 2 - Elements:v('top_bar', 'size', 0)
-		- Elements:v('timeline', 'size', 0)
 	self.enabled = available_space > size + 10
 
-	for c, control in ipairs(self.layout) do
-		control.hide = false
-		if control.element then control.element.enabled = self.enabled end
+	if not self.enabled then 
+		for _, control in ipairs(self.layout) do
+			if control.element then control.element.enabled = false end
+        end
+		return
 	end
 
-	if not self.enabled then return end
-
-	self.bx = display.width - window_border - margin
-	self.by = Elements:v('timeline', 'ay', display.height - window_border) - margin
-	self.ax, self.ay = window_border + margin, self.by - size
+	self.ay = display.height - window_border - margin - size
+    self.by = self.ay + size
+    self.ax = window_border + margin
+    self.bx = display.width - window_border - margin
 
 	local available_width, statics_width = self.bx - self.ax, 0
 	local min_content_width = statics_width

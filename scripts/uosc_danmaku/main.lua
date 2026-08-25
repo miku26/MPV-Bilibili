@@ -548,12 +548,6 @@ end)
 -- 立刻执行一次初始化同步
 sync_ui_state()
 
--------------- 键位绑定 --------------
-
-mp.add_key_binding(options.show_danmaku_keyboard_key, "show_danmaku_keyboard", function()
-    mp.commandv("script-message", "show_danmaku_keyboard")
-end)
-
 mp.register_script_message("danmaku-delay", function(...)
     local commands = {...}
     local delay_str, time_str = commands[1], commands[2]

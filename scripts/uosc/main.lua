@@ -19,8 +19,8 @@ require('lib/std')
 defaults = {
 	timeline_style = 'bar',
 	timeline_line_width = 2,
-	timeline_size = 6,
-	progress = 'windowed',
+	timeline_size = 4,
+	progress = 'never',
 	progress_size = 2,
 	progress_line_width = 12,
 	timeline_persistency = '',
@@ -53,7 +53,7 @@ defaults = {
 
 	window_border_size = 0,
 
-	autoload = false,
+	autoload = true,
 	shuffle = false,
 
 	scale = 1,
@@ -93,6 +93,7 @@ defaults = {
 	languages = 'slang,en',
 	subtitles_directory = '~~/subtitles',
 	disable_elements = '',
+	thumbnail_provider = 'thumb_engine',
 }
 options = table_copy(defaults)
 function handle_options(changed_options)
@@ -143,7 +144,7 @@ local config_defaults = {
 	opacity = {
 		timeline = 0.9,
 		position = 1,
-		chapters = 0.8,
+		chapters = 0.35,
 		slider = 0.9,
 		slider_gauge = 1,
 		controls = 0,
@@ -243,6 +244,15 @@ function update_load_types()
 	end
 
 	config.types.load = extensions
+end
+
+-- 封装清除缩略图的调用，便于统一修改引擎名称
+function clear_thumbnail()
+    mp.commandv('script-message-to', options.thumbnail_provider, 'clear')
+end
+
+function request_thumbnail(time, x, y)
+    mp.commandv('script-message-to', options.thumbnail_provider, 'thumb', tostring(time), tostring(x), tostring(y))
 end
 
 -- Updates config with values dependent on options
@@ -707,7 +717,7 @@ mp.observe_property('window-maximized', 'bool', create_state_setter('maximized',
 mp.observe_property('idle-active', 'bool', function(_, idle)
 	set_state('is_idle', idle)
 	Elements:trigger('dispositions')
-	mp.commandv('script-message-to', 'thumbfast', 'clear')
+	clear_thumbnail()
 end)
 mp.observe_property('pause', 'bool', create_state_setter('pause', function() file_end_timer:kill() end))
 mp.observe_property('volume', 'number', create_state_setter('volume'))
@@ -1112,7 +1122,7 @@ mp.register_script_message('menu-action', function(name, ...)
 		if method then menu[method](menu, ...) end
 	end
 end)
-mp.register_script_message('thumbfast-info', function(json)
+mp.register_script_message(options.thumbnail_provider .. '-info', function(json)
 	local data = utils.parse_json(json)
 	if type(data) ~= 'table' or not data.width or not data.height then
 		thumbnail.disabled = true

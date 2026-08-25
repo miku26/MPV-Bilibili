@@ -21,7 +21,7 @@ end
 function PauseIndicator:render()
     if not self.paused or state.is_idle then return nil end
 
-    local icon_size = round(180 * state.scale)
+    local icon_size = round(160 * state.scale)
 
     -- 直接将图标定位到屏幕正中央
     local cx = display.width / 2

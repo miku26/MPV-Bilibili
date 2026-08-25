@@ -2,54 +2,27 @@ local opt = require("mp.options")
 
 -- 选项
 options = {
-    -- 指定弹幕服务器地址，自定义服务需兼容 dandanplay 的 api
-    api_server = "https://api.dandanplay.net",
-    -- 指定 b 站和爱腾优的弹幕获取的兜底服务器地址，主要用于获取非动画弹幕
-    -- 可用： https://api.danmu.icu，https://dmku.hls.one
-    fallback_server = "https://api.danmu.icu",
-    -- 设置 tmdb 的 API Key，用于获取非动画条目的中文信息(当搜索内容非中文时)
-    -- 可以在 https://www.themoviedb.org 注册后去个人账号设置界面获取
-    -- 注意：自定义此参数时还需要对获取到的 API Key 进行 base64 编码
-    tmdb_api_key = "NmJmYjIxOTZkNzIyN2UyMTIzMGM3Y2YzZjQ4MDNkZGM=",
     auto_load = true,
     autoload_local_danmaku = true,
     autoload_for_url = true,
     save_danmaku = false,
-    user_agent = "mpv_danmaku/1.0",
-    proxy = "",
-    -- 可选：向 HTTP 请求传递 cookie.txt 文件路径
-    cookie_file = "",
-    -- 使用 fps 视频滤镜，大幅提升弹幕平滑度。默认禁用
     vf_fps = true,
     -- 设置要使用的 fps 滤镜参数
     fps = "120/1.001",
     -- 指定合并重复弹幕的时间间隔的容差值，单位为秒。默认值: -1，表示禁用
     merge_tolerance = -1,
     -- 指定弹幕关联历史记录文件的路径，支持绝对路径和相对路径
-    history_path = "~~/danmaku-history.json",
-    --open_search_danmaku_menu_key = "Ctrl+d",
-    show_danmaku_keyboard_key = "d",
-    -- 中文简繁转换。0-不转换，1-转换为简体，2-转换为繁体
+    --show_danmaku_keyboard_key = "d",
     chConvert = 0,
-    --滚动弹幕的显示时间
     scrolltime = 15,
-    --固定弹幕的显示时间
     fixtime = 5,
-    --字体
     fontname = "微软雅黑",
-    --字体大小 
     fontsize = 36,
-    --字体阴影
     shadow = 0,
-    --字体粗体
     bold = true,
-    -- 透明度：0（完全透明）到 1（不透明）
     opacity = 0.8,
-    --全部弹幕的显示范围(0.0-1.0)
-    displayarea = 0.75,
-    --描边 0-4
+    displayarea = 0.5,
     outline = 1.0,
-    -- 限制屏幕中同时显示的最大弹幕数量，0 表示不限制
     max_screen_danmaku = 0,
     --指定弹幕屏蔽词文件路径(black.txt)，支持绝对路径和相对路径。文件内容以换行分隔
     --支持 lua 的正则表达式写法

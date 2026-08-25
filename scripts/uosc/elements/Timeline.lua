@@ -53,17 +53,24 @@ end
 function Timeline:get_is_hovered() return self.enabled and self.is_hovered end
 
 function Timeline:update_dimensions()
+
+	Elements:maybe('controls', 'update_dimensions')
 	self.size = round(options.timeline_size * state.scale)
 	self.top_border = round(options.timeline_border * state.scale)
 	self.line_width = round(options.timeline_line_width * state.scale)
 	self.progress_line_width = round(options.progress_line_width * state.scale)
 	self.font_size = math.floor(math.min((self.size + 60 * state.scale) * 0.2, self.size * 0.9) * options.font_scale * 1.15)
+
 	local window_border_size = Elements:v('window_border', 'size', 0)
+	local controls_ay = Elements:v('controls', 'ay', display.height - window_border_size - self.size - self.top_border)
+	local spacing = 12 * state.scale
+	
 	self.ax = window_border_size
-	self.ay = display.height - window_border_size - self.size - self.top_border
 	self.bx = display.width - window_border_size
-	self.by = display.height - window_border_size
+	self.by = controls_ay - spacing
+	self.ay = self.by - self.size - self.top_border
 	self.width = self.bx - self.ax
+
 	self.chapter_size = math.max((self.by - self.ay) / 10, 3)
 	self.chapter_size_hover = self.chapter_size * 2
 
@@ -129,7 +136,7 @@ end
 
 function Timeline:clear_thumbnail()
 	if self.has_thumbnail then
-		mp.commandv('script-message-to', 'thumbfast', 'clear')
+		clear_thumbnail()
 		self.has_thumbnail = false
 	end
 end
@@ -190,7 +197,17 @@ function Timeline:render()
 	local size = self:get_effective_size()
 	local visibility = self:get_visibility()
 	self.is_hovered = false
-
+	-- 注册 Timeline 与 Controls 之间的间隙保护
+    local controls_ay = Elements:v('controls', 'ay', display.height)
+    if self.by < controls_ay then
+        local gap_rect = {
+            ax = self.ax,
+            ay = self.by,
+            bx = self.bx,
+            by = controls_ay
+        }
+        cursor:zone('primary_click', gap_rect, function() end)
+    end
 	if size < 1 then
 		self:clear_thumbnail()
 		return
@@ -221,11 +238,6 @@ function Timeline:render()
 
 	local ass = assdraw.ass_new()
 	local progress_size = math.max(self.min_progress_size, self.progress_size)
-
-	-- Text opacity rapidly drops to 0 just before it starts overflowing, or before it reaches progress_size
-	--local hide_text_below = math.max(self.font_size * 0.8, progress_size * 2)
-	--local hide_text_ramp = hide_text_below / 2
-	--local text_opacity = clamp(0, size - hide_text_below, hide_text_ramp) / hide_text_ramp
 
 	local tooltip_gap = round(2 * state.scale)
 	local timestamp_gap = tooltip_gap
@@ -265,25 +277,16 @@ function Timeline:render()
 		return time <= state.time and x or x + line_width
 	end
 
-	-- Background
-	ass:new_event()
-	ass:pos(0, 0)
-	ass:append('{\\rDefault\\an7\\blur0\\bord0\\1c&H' .. fg .. '}')
-	ass:opacity(0.3)
-	ass:draw_start()
-	ass:rect_cw(bax, bay, fax, bby) --left of progress
-	ass:rect_cw(fbx, bay, bbx, bby) --right of progress
-	ass:rect_cw(fax, bay, fbx, fay) --above progress
-	ass:draw_stop()
-	
-	-- Progress
-	local function draw_progress()
-		ass:rect(fax, fay, fbx, fby, {
-			color = "ecae00",   -- 蓝色
-			opacity = 0.5,      -- 半透明
-			boder = 0
-		})
-	end
+	-- Background (removed)
+	--ass:new_event()
+	--ass:pos(0, 0)
+	--ass:append('{\\rDefault\\an7\\blur0\\bord0\\1c&H' .. fg .. '}')
+	--ass:opacity(0.3)
+	--ass:draw_start()
+	--ass:rect_cw(bax, bay, fax, bby) --left of progress
+	--ass:rect_cw(fbx, bay, bbx, bby) --right of progress
+	--ass:rect_cw(fax, bay, fbx, fay) --above progress
+	--ass:draw_stop()
 
 	-- Youtube heatmap
 	local function draw_heatmap()
@@ -299,16 +302,115 @@ function Timeline:render()
 		end
 	end
 
-	-- Change draw order based on 'timeline_style' to keep the heatmap visible
-	if is_line then
-		draw_heatmap()
-		draw_progress()
-	else
-		draw_progress()
-		draw_heatmap()
+	-- Progress (分段绘制，仅显示在章节区间内已播放的部分)
+	local function draw_progress()
+		local chapter_times = {}
+		for _, ch in ipairs(state.chapters) do
+			table.insert(chapter_times, ch.time)
+		end
+
+		if #chapter_times == 0 then
+			-- 无章节时，绘制连续进度条
+			ass:rect(fax, fay, fbx, fby, {
+				color = "ecae00",
+				opacity = 0.9,
+				boder = 0
+			})
+		else
+			-- 有章节时，分段绘制进度条
+			table.insert(chapter_times, state.duration)  -- 添加虚拟结尾
+			local current_time = state.time
+			local gap = 3  -- 与章节分段间隙保持一致
+			for i = 1, #chapter_times - 1 do
+				local start_time = chapter_times[i]
+				local end_time = chapter_times[i+1]
+				local play_start = start_time
+				local play_end = math.min(end_time, current_time)
+				if play_end > play_start then
+					local x1 = t2x(play_start) + gap
+					local x2 = t2x(play_end) - gap
+					if x1 < x2 then
+						ass:rect(x1, fay, x2, fby, {
+							color = "ecae00",
+							opacity = 0.9,
+							boder = 0
+						})
+					end
+				end
+			end
+		end
 	end
 
-	-- Uncached ranges
+	-- 收集章节时间（供后续使用）
+	local chapter_times = {}
+	for _, ch in ipairs(state.chapters) do
+		table.insert(chapter_times, ch.time)
+	end
+
+	-- 存储悬停的章节分段信息（起始/结束时间，起始/结束x）
+	local hovered_segment = nil  -- {start_time, end_time, start_x, end_x}
+
+	-- 1. 绘制普通章节分段（非悬停），同时检测悬停
+	if (config.opacity.chapters > 0 and (#chapter_times > 0 or state.ab_loop_a or state.ab_loop_b)) then
+		local chapter_opacity = config.opacity.chapters
+		local gap = 4
+		local diamond_border = options.timeline_border and math.max(options.timeline_border, 1) or 1
+
+		for i = 1, #chapter_times do
+			local start_time = chapter_times[i]
+			local end_time = (i < #chapter_times) and chapter_times[i+1] or state.duration
+			local start_x = t2x(start_time)
+			local end_x = t2x(end_time)
+			start_x = start_x + gap
+			end_x = end_x - gap
+			if start_x < end_x then
+				local rect = {ax = start_x, ay = fay, bx = end_x, by = fby}
+				local is_hover = get_point_to_rectangle_proximity(cursor, rect) <= 0
+				if is_hover then
+					hovered_segment = {
+						start_time = start_time,
+						end_time = end_time,
+						start_x = start_x,
+						end_x = end_x
+					}
+					self.is_hovered = true
+				else
+					ass:rect(start_x, fay, end_x, fby, {
+						color = fg,
+						opacity = chapter_opacity,
+						border = 0,
+					})
+				end
+			end
+		end
+
+		-- A-B loop indicators
+		local has_a, has_b = state.ab_loop_a and state.ab_loop_a >= 0, state.ab_loop_b and state.ab_loop_b > 0
+		local ab_radius = round(math.min(math.max(8, foreground_size * 0.25), foreground_size))
+
+		---@param time number
+		---@param kind 'a'|'b'
+		local function draw_ab_indicator(time, kind)
+			local x = t2x(time)
+			ass:new_event()
+			ass:append(string.format(
+				'{\\pos(0,0)\\rDefault\\an7\\blur0\\yshad0.01\\bord%f\\1c&H%s\\3c&H%s\\4c&H%s\\1a&H%X&\\3a&H00&\\4a&H00&}',
+				diamond_border, fg, bg, bg, opacity_to_alpha(config.opacity.chapters)
+			))
+			ass:draw_start()
+			ass:move_to(x, fby - ab_radius)
+			if kind == 'b' then ass:line_to(x + 3, fby - ab_radius) end
+			ass:line_to(x + (kind == 'a' and 0 or ab_radius), fby)
+			ass:line_to(x - (kind == 'b' and 0 or ab_radius), fby)
+			if kind == 'a' then ass:line_to(x - 3, fby - ab_radius) end
+			ass:draw_stop()
+		end
+
+		if has_a then draw_ab_indicator(state.ab_loop_a, 'a') end
+		if has_b then draw_ab_indicator(state.ab_loop_b, 'b') end
+	end
+
+	-- 2. 绘制 uncached ranges 和 custom ranges
 	if state.uncached_ranges then
 		local opts = {size = 80, anchor_y = fby}
 		local texture_char = visibility > 0 and 'b' or 'a'
@@ -325,7 +427,6 @@ function Timeline:render()
 		end
 	end
 
-	-- Custom ranges
 	for _, chapter_range in ipairs(state.chapter_ranges) do
 		local rax = chapter_range.start < 0.1 and bax or t2x(chapter_range.start)
 		local rbx = chapter_range['end'] > state.duration - 0.1 and bbx
@@ -333,103 +434,71 @@ function Timeline:render()
 		ass:rect(rax, fay, rbx, fby, {color = chapter_range.color, opacity = chapter_range.opacity})
 	end
 
-	-- Chapters
-	local hovered_chapter = nil
-	if (config.opacity.chapters > 0 and (#state.chapters > 0 or state.ab_loop_a or state.ab_loop_b)) then
-		local diamond_radius = math.min(math.max(1, foreground_size * 0.8), self.chapter_size)
-		local diamond_radius_hovered = diamond_radius * 2
-		local diamond_border = options.timeline_border and math.max(options.timeline_border, 1) or 1
-
-		if diamond_radius > 0 then
-local function draw_chapter(time, radius)
-    local chapter_x, chapter_y = t2x(time), fay - 1
-    ass:circle(chapter_x, chapter_y, radius, {
-        color = fg,
-        opacity = config.opacity.chapters,
-        border = 0,
-        border_color = bg,
-    })
-end
-
-			if #state.chapters > 0 then
-				-- Find hovered chapter indicator
-				local closest_delta = math.huge
-
-				if self.proximity_raw < diamond_radius_hovered then
-					for i, chapter in ipairs(state.chapters) do
-						local chapter_x, chapter_y = t2x(chapter.time), fay - 1
-						local cursor_chapter_delta = math.sqrt((cursor.x - chapter_x) ^ 2 + (cursor.y - chapter_y) ^ 2)
-						if cursor_chapter_delta <= diamond_radius_hovered and cursor_chapter_delta < closest_delta then
-							hovered_chapter, closest_delta = chapter, cursor_chapter_delta
-							self.is_hovered = true
-						end
-					end
-				end
-
-				for i, chapter in ipairs(state.chapters) do
-					if chapter ~= hovered_chapter then draw_chapter(chapter.time, diamond_radius) end
-					local circle = {point = {x = t2x(chapter.time), y = fay - 1}, r = diamond_radius_hovered}
-					if visibility > 0 and chapter == hovered_chapter then
-						cursor:zone('primary_down', circle, function()
-							mp.commandv('seek', chapter.time, 'absolute+exact')
-						end)
-					end
-				end
-
-				-- Render hovered chapter above others
-				if hovered_chapter then
-					draw_chapter(hovered_chapter.time, diamond_radius_hovered)
-					timestamp_gap = tooltip_gap + round(diamond_radius_hovered)
-				else
-					timestamp_gap = tooltip_gap + round(diamond_radius)
-				end
-			end
-
-			-- A-B loop indicators
-			local has_a, has_b = state.ab_loop_a and state.ab_loop_a >= 0, state.ab_loop_b and state.ab_loop_b > 0
-			local ab_radius = round(math.min(math.max(8, foreground_size * 0.25), foreground_size))
-
-			---@param time number
-			---@param kind 'a'|'b'
-			local function draw_ab_indicator(time, kind)
-				local x = t2x(time)
-				ass:new_event()
-				ass:append(string.format(
-					'{\\pos(0,0)\\rDefault\\an7\\blur0\\yshad0.01\\bord%f\\1c&H%s\\3c&H%s\\4c&H%s\\1a&H%X&\\3a&H00&\\4a&H00&}',
-					diamond_border, fg, bg, bg, opacity_to_alpha(config.opacity.chapters)
-				))
-				ass:draw_start()
-				ass:move_to(x, fby - ab_radius)
-				if kind == 'b' then ass:line_to(x + 3, fby - ab_radius) end
-				ass:line_to(x + (kind == 'a' and 0 or ab_radius), fby)
-				ass:line_to(x - (kind == 'b' and 0 or ab_radius), fby)
-				if kind == 'a' then ass:line_to(x - 3, fby - ab_radius) end
-				ass:draw_stop()
-			end
-
-			if has_a then draw_ab_indicator(state.ab_loop_a, 'a') end
-			if has_b then draw_ab_indicator(state.ab_loop_b, 'b') end
-		end
+	-- 3. 绘制进度条（与 heatmap，顺序由 is_line 决定）
+	if is_line then
+		draw_heatmap()
+		draw_progress()
+	else
+		draw_progress()
+		draw_heatmap()
 	end
 
-	local function draw_timeline_timestamp(x, y, align, timestamp, opts)
-		opts.color, opts.border_color = fgt, fg
-		opts.clip = '\\clip(' .. foreground_coordinates .. ')'
-		local func = options.time_precision > 0 and ass.timestamp or ass.txt
-		func(ass, x, y, align, timestamp, opts)
-		opts.color, opts.border_color = bgt, bg
-		opts.clip = '\\iclip(' .. foreground_coordinates .. ')'
-		func(ass, x, y, align, timestamp, opts)
+	-- 4. 最后绘制悬停的章节分段（放大效果，已播放和未播放颜色保持与普通状态一致）
+	if hovered_segment then
+		local start_x = hovered_segment.start_x
+		local end_x = hovered_segment.end_x
+		local start_time = hovered_segment.start_time
+		local end_time = hovered_segment.end_time
+		local current_time = state.time
+
+		-- 计算该分段内已播放的右边界（时间）
+		local play_time = math.min(end_time, current_time)
+		local play_x = t2x(play_time)
+		-- 裁剪到分段范围内
+		play_x = math.max(start_x, math.min(end_x, play_x))
+
+		-- 扩展量
+		local expand = size * 0.7
+		local expanded_ay = fay - expand
+		local expanded_by = fby + expand
+
+		-- 已播放部分
+		if play_x > start_x then
+			ass:rect(start_x, expanded_ay, play_x, expanded_by, {
+				color = "ecae00",
+				opacity = 0.9,
+				border = 0,
+			})
+		end
+		-- 未播放部分（使用普通分段颜色和透明度，保持颜色一致）
+		if play_x < end_x then
+			ass:rect(play_x, expanded_ay, end_x, expanded_by, {
+				color = fg,
+				opacity = config.opacity.chapters,  -- 与普通分段透明度一致
+				border = 0,
+			})
+		end
 	end
 
 	-- Hovered time and chapter
 	local rendered_thumbnail = false
+	local hovered_chapter = nil
+	if hovered_segment then
+		local center_x = (hovered_segment.start_x + hovered_segment.end_x) / 2
+		local hovered_time = self:get_time_at_x(center_x)
+		for _, ch in ipairs(state.chapters) do
+			if math.abs(ch.time - hovered_time) < 0.5 then
+				hovered_chapter = ch
+				break
+			end
+		end
+	end
+
 	if (self.proximity_raw <= 0 or self.pressed or hovered_chapter) and not Elements:v('speed', 'dragging') then
 		local cursor_x = hovered_chapter and t2x(hovered_chapter.time) or cursor.x
 		local hovered_seconds = hovered_chapter and hovered_chapter.time or self:get_time_at_x(cursor.x)
 
 		-- Cursor line
-		-- 0.5 to switch when the pixel is half filled in
 		local color = ((fax - 0.5) < cursor_x and cursor_x < (fbx + 0.5)) and bg or fg
 		local ax, ay, bx, by = cursor_x - 0.5, fay, cursor_x + 0.5, fby
 		ass:rect(ax, ay, bx, by, {color = color, opacity = 0.33})
@@ -461,22 +530,23 @@ end
 			})
 			local thumb_seconds = (state.rebase_start_time == false and state.start_time) and
 				(hovered_seconds - state.start_time) or hovered_seconds
-			mp.commandv('script-message-to', 'thumbfast', 'thumb', thumb_seconds, thumb_x, thumb_y)
+			request_thumbnail(thumb_seconds, thumb_x, thumb_y)
 			self.has_thumbnail, rendered_thumbnail = true, true
 			tooltip_anchor.ay = ay
 		end
 
 		-- Timestamp
 		local opts = {
-			size = self.font_size * 3.4, offset = timestamp_gap, margin = tooltip_gap, timestamp = options.time_precision > 0, background = false, bold = true,
+			size = self.font_size * 4.6,
+			offset = timestamp_gap,
+			margin = tooltip_gap,
+			timestamp = options.time_precision > 0,
+			background = false,
+			bold = true,
 		}
-
 		local hovered_time_human = format_time(hovered_seconds, state.duration)
 		opts.width_overwrite = timestamp_width(hovered_time_human, opts)
 		tooltip_anchor = ass:tooltip(tooltip_anchor, hovered_time_human, opts)
-
-		-- Chapter title
-
 	end
 
 	-- Clear thumbnail

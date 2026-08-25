@@ -183,14 +183,11 @@ function Episode:get_panel_rect()
 
     local center_x = (self.ax + self.bx) / 2
     local panel_x = center_x - total_width / 2
-    local panel_y = self.ay - final_height - 8
-    if panel_y < 0 then
-        panel_y = self.by + 8
-        if panel_y + final_height > display.height - 8 then
-            panel_y = display.height - final_height - 8
-        end
-    end
-    panel_x = math.max(8, math.min(panel_x, display.width - total_width - 8))
+    local timeline_ay = Elements:v('timeline', 'ay', display.height)
+	local panel_y = timeline_ay - 16 - final_height
+	if panel_y < 0 then panel_y = 0 end
+
+	panel_x = math.max(8, math.min(panel_x, display.width - total_width - 8))
 
     return {
         ax = panel_x,

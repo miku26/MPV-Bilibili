@@ -1,1 +1,1 @@
-{"volume":100,"danmaku_style":{"stroke_type":"heavy","fontname":"微软雅黑","fontsize":36,"scrolltime":15,"opacity":0.800000,"displayarea":0.500000,"bold":true},"show_danmaku":true}
+{"danmaku_style":{"opacity":0.800000,"displayarea":0.500000,"bold":true,"stroke_type":"heavy","fontname":"微软雅黑","fontsize":36,"scrolltime":15},"volume":100,"show_danmaku":false}
