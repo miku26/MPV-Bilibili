@@ -125,7 +125,13 @@ function PlayMode:render()
         local panel_height = round(size * 3.8 + 10)
         local panel_x = center_x - panel_width / 2
 		local timeline_ay = Elements:v('timeline', 'ay', display.height)
-		local panel_y = timeline_ay - 16 - panel_height
+		local timeline_enabled = Elements.timeline and Elements.timeline.enabled
+		local panel_y
+		if timeline_enabled then
+			panel_y = timeline_ay - 16 - panel_height
+		else
+			panel_y = self.ay - panel_height - 10
+		end
 		if panel_y < 0 then panel_y = 0 end
 
         local panel_rect = {ax = panel_x, ay = panel_y, bx = panel_x + panel_width, by = panel_y + panel_height}

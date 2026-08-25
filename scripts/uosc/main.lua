@@ -28,7 +28,7 @@ defaults = {
 	timeline_step = '5',
 	timeline_cache = true,
 	timeline_heatmap = 'overlay',
-	timeline_mbtn_right = 'idle,audio',
+	timeline_persistency = 'idle,audio',
 
 	controls =
 	'gap,prev,gap,play-pause,gap,next,gap,<!idle>time,<has_many_video>video,<has_many_edition>editions,<stream>stream-quality,gap,space,gap,episode,gap,speed,gap,<has_chapter>chapters,gap,danmaku_toggle,danmaku_styles,subtitles,audio,volume,play-mode,fullscreen',

@@ -267,7 +267,13 @@ function DanmakuStyles:get_panel_rect()
     end
 
 	local timeline_ay = Elements:v('timeline', 'ay', display.height)
-	local panel_y = timeline_ay - 16 - panel_height
+	local timeline_enabled = Elements.timeline and Elements.timeline.enabled
+	local panel_y
+	if timeline_enabled then
+		panel_y = timeline_ay - 16 - panel_height
+	else
+		panel_y = self.ay - panel_height - 8   -- 按钮上方 8px
+	end
 	if panel_y < 0 then panel_y = 0 end
 
 	panel_x = math.max(8, math.min(panel_x, display.width - total_width - 8))

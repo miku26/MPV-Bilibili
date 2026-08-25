@@ -98,23 +98,28 @@ function Button:render()
 		local rect_w = text_w + pad * 2
 		local rect_h = text_h + pad * 2
 
-		-- 默认置于按钮上方居中
+		-- 获取 Timeline 状态
+		local timeline_ay = Elements:v('timeline', 'ay', display.height)
+		local timeline_enabled = Elements.timeline and Elements.timeline.enabled
+
+		-- 水平居中
 		local tx = self.ax + (self.bx - self.ax) / 2 - rect_w / 2
-		local ty = self.ay - rect_h - margin
 
-		-- 垂直空间不足则放于下方
-		if ty < 0 then
-			ty = self.by + margin
+		-- 垂直定位：有 Timeline 时对齐到 timeline_ay - 16，否则在按钮上方
+		local ty
+		if timeline_enabled then
+			ty = timeline_ay - 16 - rect_h
+		else
+			ty = self.ay - rect_h - 10
 		end
+		if ty < 0 then ty = 0 end
 
-		-- **水平溢出处理**：若右侧超出屏幕，改为右对齐（紧贴按钮右边缘）
+		-- 水平溢出处理
 		local right_edge = tx + rect_w
 		if right_edge > display.width - margin then
-			tx = self.bx - rect_w   -- 右对齐
+			tx = self.bx - rect_w
 		end
-		if tx < margin then
-			tx = margin
-		end
+		if tx < margin then tx = margin end
 
 		ass:txt(tx + rect_w / 2, ty + rect_h / 2, 5, self.tooltip, text_opts)
 	end

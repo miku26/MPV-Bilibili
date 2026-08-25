@@ -51,7 +51,13 @@ function Volume:get_slider_rect()
     local center_x = btn_ax + btn_width / 2
 	
 	local timeline_ay = Elements:v('timeline', 'ay', display.height)
-	local slider_ay = timeline_ay - 4 - slider_height
+	local timeline_enabled = Elements.timeline and Elements.timeline.enabled
+	local slider_ay
+	if timeline_enabled then
+		slider_ay = timeline_ay - 16 - slider_height
+	else
+		slider_ay = self.ay - slider_height - 4
+	end
 	if slider_ay < 0 then slider_ay = 0 end
 
     return {
