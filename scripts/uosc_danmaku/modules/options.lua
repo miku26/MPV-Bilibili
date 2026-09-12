@@ -17,12 +17,10 @@ options = {
     outline = 1.0,
     max_screen_danmaku = 0,
     blacklist_path = "",
-    message_anlignment = 7,
+    message_alignment = 7,
     message_x = 30,
     message_y = 30,
     history_path = "~~/danmaku_history.json",
-
-    layout_overflow = 0.75,
 }
 
 opt.read_options(options, mp.get_script_name(), function() end)

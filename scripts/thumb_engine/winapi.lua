@@ -24,10 +24,7 @@ function M.init(options, os_name)
 
 	M.INVALID_HANDLE_VALUE = ffi.cast("void*", -1)
 
-	-- don't care about how many bytes WriteFile wrote, so allocate something to store the result once
 	M._lpNumberOfBytesWritten = ffi.new("unsigned long[1]")
-
-	-- cache flags used in run() to avoid bor() call
 	M._createfile_pipe_flags = M.bit.bor(M.FILE_FLAG_WRITE_THROUGH, M.FILE_FLAG_NO_BUFFERING)
 
 	ffi.cdef[[
@@ -51,7 +48,6 @@ function M.init(options, os_name)
 		return ""
 	end
 
-	-- 初始化 socket 宽字符缓存
 	if os_name == "windows" then
 		M.socket_wc = M.MultiByteToWideChar("\\\\.\\pipe\\" .. options.socket)
 	end

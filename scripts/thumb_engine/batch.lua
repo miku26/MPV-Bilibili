@@ -1,5 +1,4 @@
 local mp = require "mp"
-local common = require "common"
 mp.utils = require "mp.utils"
 
 local M = {}
@@ -8,19 +7,21 @@ local options
 local os_name
 
 -- Batch state
-local batch_ids = {}
-local batch_queue = {}
+local batch_ids = {}            -- { [async_id] = true }
+local batch_queue = {}          -- { {index=, time=}, ... }
 local batch_workers = 0
 local batch_active = false
 local batch_params = nil
-local batch_completed = {}
-local batch_completed_count = 0
+local batch_completed = {}      -- { [index] = true }
 local batch_failed = 0
+local batch_overlay_shown = {}  -- { [overlay_id] = true }
 
 function M.init(_options, _os_name)
 	options = _options
 	os_name = _os_name
 end
+
+-- =============================================================================
 
 local function get_bat_dir()
 	local base = options.bat_path
@@ -35,18 +36,96 @@ local function get_bat_dir()
 	return mp.utils.join_path(base, "thumb_bat" .. mp.utils.getpid())
 end
 
+local function parse_overlay_ids()
+	local ids = {}
+	local str = options.bat_overlay_ids
+	if not str or str == "" then return ids end
+	for id_str in str:gmatch("[^,]+") do
+		local id = tonumber(id_str:match("^%s*(%d+)%s*$"))
+		if id and id >= 0 and id <= 63 then
+			ids[#ids + 1] = id
+		end
+	end
+	return ids
+end
+
+-- =============================================================================
+
+local function ensure_dir(dir)
+	if os_name == "windows" then
+		dir = dir:gsub("/", "\\")
+	end
+
+	if mp.utils.file_info(dir) then return true end
+
+	if os_name == "windows" then
+		mp.command_native({
+			name = "subprocess",
+			args = {"cmd", "/c", "mkdir", dir},
+			playback_only = false,
+			capture_stdout = true,
+			capture_stderr = true,
+		})
+	else
+		mp.command_native({
+			name = "subprocess",
+			args = {"mkdir", "-p", dir},
+			playback_only = false,
+		})
+	end
+
+	return mp.utils.file_info(dir) ~= nil
+end
+
+-- =============================================================================
+
+local function build_bat_vf(width, height)
+	local dvp = mp.get_property_number("current-tracks/video/dolby-vision-profile", 0)
+	local hdr = mp.get_property_number("video-params/sig-peak", 1)
+	local scale = "scale=" .. width .. ":" .. height .. ":flags=fast_bilinear"
+
+	if dvp == 5 then
+		return scale .. ",libplacebo=colorspace=bt709:color_primaries=bt709:color_trc=bt709:gamut_mode=desaturate:tonemapping=spline"
+	elseif hdr > 1 then
+		return scale .. ",zscale=t=linear:npl=150,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=4.0,zscale=t=bt709:m=bt709:r=tv"
+	end
+	return scale
+end
+
 local function build_ffmpeg_multi_args(tasks, use_keyframe)
 	local ffmpeg_path = options.bat_binpath == "default" and "ffmpeg" or options.bat_binpath
 	local input_path = mp.get_property("path")
 	if not input_path or input_path == "" then return nil end
 
-	local args = common.ffmpeg_base_args(ffmpeg_path)
-	local hwaccel_args = common.ffmpeg_hwaccel_args(options.bat_hwdec, os_name)
-	local per_input = common.ffmpeg_fast_input_args()
+	local args = { ffmpeg_path, "-loglevel", "quiet" }
+
+	local hwaccel_args = {}
+	if options.bat_hwdec ~= "no" then
+		hwaccel_args[#hwaccel_args + 1] = "-hwaccel"
+		if options.bat_hwdec == "yes" or options.bat_hwdec == "auto" then
+			if os_name == "windows" then
+				hwaccel_args[#hwaccel_args + 1] = "d3d11va"
+			elseif os_name == "darwin" then
+				hwaccel_args[#hwaccel_args + 1] = "videotoolbox"
+			else
+				hwaccel_args[#hwaccel_args + 1] = "auto"
+			end
+		else
+			hwaccel_args[#hwaccel_args + 1] = options.bat_hwdec
+		end
+	end
+
+	local per_input = {
+		"-analyzeduration", "0",
+		"-probesize", "128000",
+		"-skip_loop_filter", "all",
+		"-skip_idct", "all",
+		"-flags2", "fast",
+	}
 
 	for _, task in ipairs(tasks) do
-		common.append_args(args, per_input)
-		common.append_args(args, hwaccel_args)
+		for _, v in ipairs(per_input) do args[#args + 1] = v end
+		for _, v in ipairs(hwaccel_args) do args[#args + 1] = v end
 		if use_keyframe then
 			args[#args + 1] = "-noaccurate_seek"
 		end
@@ -58,7 +137,7 @@ local function build_ffmpeg_multi_args(tasks, use_keyframe)
 
 	for i, task in ipairs(tasks) do
 		local output_path = mp.utils.join_path(batch_params._output_dir, "bat_" .. task.index .. ".bgra")
-		common.append_args(args, {
+		local per_output = {
 			"-map", (i - 1) .. ":v:0",
 			"-threads", tostring(options.bat_threads),
 			"-vframes", "1",
@@ -67,10 +146,23 @@ local function build_ffmpeg_multi_args(tasks, use_keyframe)
 			"-pix_fmt", "bgra",
 			"-f", "rawvideo",
 			"-y", output_path,
-		})
+		}
+		for _, v in ipairs(per_output) do args[#args + 1] = v end
 	end
 
 	return args
+end
+
+local function build_command(args)
+	local command = {
+		name = "subprocess",
+		args = args,
+		playback_only = true,
+	}
+	if os_name == "darwin" then
+		command.env = "PATH=" .. os.getenv("PATH")
+	end
+	return command
 end
 
 -- =============================================================================
@@ -82,40 +174,46 @@ local function bat_draw(index)
 	if not overlay_id or not pos then return end
 
 	local path = mp.utils.join_path(batch_params._output_dir, "bat_" .. index .. ".bgra")
-	common.overlay_add(
-		overlay_id,
-		pos[1],
-		pos[2],
-		path,
-		batch_params.width,
-		batch_params.height
-	)
+	local w = batch_params.width
+	local h = batch_params.height
+
+	mp.command_native({
+		name = "overlay-add",
+		id = overlay_id,
+		x = pos[1],
+		y = pos[2],
+		file = path,
+		offset = 0,
+		fmt = "bgra",
+		w = w,
+		h = h,
+		stride = 4 * w,
+	})
+	batch_overlay_shown[overlay_id] = true
 end
 
 local function bat_clear()
-	if not batch_params then return end
-	for _, id in ipairs(batch_params._overlay_ids) do
-		common.overlay_remove(id)
+	for id in pairs(batch_overlay_shown) do
+		mp.command_native_async({name = "overlay-remove", id = id}, function() end)
 	end
+	batch_overlay_shown = {}
 end
 
+-- 检查一帧文件是否成功写出；成功则记录、绘制并通知 requester
 local function try_accept_frame(index)
 	local fpath = mp.utils.join_path(batch_params._output_dir, "bat_" .. index .. ".bgra")
-	if not common.raw_bgra_ok(fpath, batch_params.width, batch_params.height) then
+	local finfo = mp.utils.file_info(fpath)
+	if not (finfo and finfo.size == batch_params.width * batch_params.height * 4) then
 		return false
 	end
-
-	if not batch_completed[index] then
-		batch_completed[index] = true
-		batch_completed_count = batch_completed_count + 1
-	end
+	batch_completed[index] = true
 	bat_draw(index)
-	common.send_json(batch_params.requester, "batch_once", {
+	mp.commandv("script-message-to", batch_params.requester, "batch_once", mp.utils.format_json({
 		index = index,
 		path = fpath,
 		width = batch_params.width,
 		height = batch_params.height,
-	})
+	}))
 	return true
 end
 
@@ -125,8 +223,24 @@ local function delete_batch_files(remove_dir)
 	if not batch_params then return end
 	local dir = batch_params._output_dir
 	if remove_dir then
-		common.remove_dir(dir, os_name)
+		-- 直接删除整个目录
+		if os_name == "windows" then
+			mp.command_native({
+				name = "subprocess",
+				args = {"cmd", "/c", "rmdir", "/s", "/q", dir:gsub("/", "\\")},
+				playback_only = false,
+				capture_stdout = true,
+				capture_stderr = true,
+			})
+		else
+			mp.command_native({
+				name = "subprocess",
+				args = {"rm", "-rf", dir},
+				playback_only = false,
+			})
+		end
 	else
+		-- 仅删文件，保留目录
 		for i = 0, #batch_params.times - 1 do
 			os.remove(mp.utils.join_path(dir, "bat_" .. i .. ".bgra"))
 		end
@@ -144,38 +258,39 @@ end
 -- =============================================================================
 
 local function batch_worker()
-	-- 收尾分支：inactive 或队列空，统一处理 worker 计数
-	if not batch_active or #batch_queue == 0 then
-		if batch_workers > 0 then
-			batch_workers = batch_workers - 1
-		end
+	if not batch_active then
+		batch_workers = batch_workers - 1
+		return
+	end
 
-		if not batch_active then return end
-
+	if #batch_queue == 0 then
+		batch_workers = batch_workers - 1
 		if batch_workers <= 0 then
 			batch_workers = 0
 			if batch_params then
 				local total = #batch_params.times
-				common.send_json(batch_params.requester, "batch_done", {
+				local completed_count = 0
+				for _ in pairs(batch_completed) do completed_count = completed_count + 1 end
+				mp.commandv("script-message-to", batch_params.requester, "batch_done", mp.utils.format_json({
 					total = total,
-					completed = batch_completed_count,
+					completed = completed_count,
 					failed = batch_failed,
 					output_dir = batch_params._output_dir,
 					width = batch_params.width,
 					height = batch_params.height,
-				})
-				mp.msg.info("batch done: " .. batch_completed_count .. "/" ..
-					total .. ", failed: " .. batch_failed)
+				}))
+				mp.msg.info("batch done: " .. completed_count .. "/" .. total .. ", failed: " .. batch_failed)
 			end
 			batch_active = false
 		end
 		return
 	end
 
+	-- 从队列取出任务：均分剩余到 worker 数，但限制单次最大帧数以实现逐步显示
+	-- libplacebo 滤镜多输入会冲突，强制单帧
 	local max_per_call = batch_params._use_libplacebo and 1 or 2
 	local jobs = math.min(math.ceil(#batch_queue / batch_workers), max_per_call)
 	if jobs < 1 then jobs = 1 end
-
 	local tasks = {}
 	for _ = 1, jobs do
 		tasks[#tasks + 1] = table.remove(batch_queue, 1)
@@ -189,19 +304,12 @@ local function batch_worker()
 		return
 	end
 
-	local command = common.ffmpeg_command(cmd_args, {
-		playback_only = true,
-		env_path = (os_name == "darwin"),
-	})
-
 	local id
-	id = mp.command_native_async(command, function(success, result)
+	id = mp.command_native_async(build_command(cmd_args), function(success, result)
 		batch_ids[id] = nil
 
 		if not batch_active then
-			if batch_workers > 0 then
-				batch_workers = batch_workers - 1
-			end
+			batch_workers = batch_workers - 1
 			return
 		end
 
@@ -224,31 +332,29 @@ function M.batch_extract(params)
 		M.batch_cancel()
 	end
 
-	local ov_ids = common.parse_overlay_ids(options.bat_overlay_ids)
+	local ov_ids = parse_overlay_ids()
 	local bat_dir = get_bat_dir()
 
 	batch_active = true
 	params._overlay_ids = ov_ids
 	params._output_dir = bat_dir
-	params._vf = common.build_scale_vf(params.width, params.height, {
-		dvp = mp.get_property_number("current-tracks/video/dolby-vision-profile", 0),
-		hdr = mp.get_property_number("video-params/sig-peak", 1),
-	})
+	params._vf = build_bat_vf(params.width, params.height)
 	params._use_libplacebo = params._vf:find("libplacebo") ~= nil
 	batch_params = params
 	batch_completed = {}
-	batch_completed_count = 0
 	batch_failed = 0
 	batch_queue = {}
 	batch_ids = {}
+	batch_overlay_shown = {}
 	batch_workers = 0
 
-	if not common.ensure_dir(bat_dir, os_name) then
+	if not ensure_dir(bat_dir) then
 		mp.msg.error("batch: cannot create output directory: " .. bat_dir)
 		batch_active = false
 		return
 	end
 
+	-- 构建任务队列（暂停恢复：跳过已存在且大小正确的文件）
 	for i, time in ipairs(params.times) do
 		local index = i - 1
 		if not try_accept_frame(index) then
@@ -257,25 +363,26 @@ function M.batch_extract(params)
 	end
 
 	local queued = #batch_queue
-	local cached = batch_completed_count
+	local cached = 0
+	for _ in pairs(batch_completed) do cached = cached + 1 end
 
 	if queued == 0 then
+		-- 全部已缓存 无需启动 worker
 		batch_active = false
 		local total = #params.times
-		common.send_json(params.requester, "batch_done", {
+		mp.commandv("script-message-to", params.requester, "batch_done", mp.utils.format_json({
 			total = total,
 			completed = total,
 			failed = 0,
 			output_dir = bat_dir,
 			width = params.width,
 			height = params.height,
-		})
+		}))
 		mp.msg.verbose("batch extract: " .. total .. " frames (all cached)")
 		return
 	end
 
-	mp.msg.info("batch extract: " .. #params.times .. " frames (" .. cached ..
-		" cached, " .. queued .. " queued), workers=" .. options.bat_be_workers)
+	mp.msg.info("batch extract: " .. #params.times .. " frames (" .. cached .. " cached, " .. queued .. " queued), workers=" .. options.bat_be_workers)
 
 	local concurrency = math.max(1, options.bat_be_workers)
 	for _ = 1, math.min(concurrency, queued) do
@@ -302,7 +409,6 @@ function M.batch_cancel(remove_dir)
 	delete_batch_files(remove_dir)
 	batch_queue = {}
 	batch_completed = {}
-	batch_completed_count = 0
 	batch_failed = 0
 	batch_workers = 0
 	batch_params = nil

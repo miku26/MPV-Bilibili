@@ -79,6 +79,7 @@ function M.move_file(from, to, os_name)
 	if os_name == "windows" then
 		os.remove(to)
 	end
+	-- move the file because it can get overwritten while overlay-add is reading it, and crash the player
 	os.rename(from, to)
 end
 

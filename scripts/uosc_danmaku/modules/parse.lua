@@ -1,7 +1,7 @@
 local msg   = require 'mp.msg'
 local utils = require 'mp.utils'
 
--- 简繁字库延迟加载
+-- 简繁字库延迟加载：默认 chConvert=0 时不 require 上万行的 dicts
 local s2t, t2s = nil, nil
 local function ensure_dicts()
     if s2t then return end
@@ -41,7 +41,9 @@ end
 
 local function load_blacklist_patterns(filepath)
     local patterns = {}
-    if not file_exists(filepath) then return patterns end
+    if not file_exists(filepath) then
+        return patterns
+    end
     local content = read_file(filepath)
     if not content then
         msg.error("无法读取黑名单文件: " .. filepath)
@@ -51,7 +53,9 @@ local function load_blacklist_patterns(filepath)
     if string.match(filepath, "%.xml$") then
         for line in content:gmatch("[^\n]+") do
             local pattern = line:match('<item%s+enabled="true">t=(.-)</item>')
-            if pattern then table.insert(patterns, pattern) end
+            if pattern then
+                table.insert(patterns, pattern)
+            end
         end
     elseif string.match(filepath, "%.json$") then
         local json = utils.parse_json(content)
@@ -65,9 +69,12 @@ local function load_blacklist_patterns(filepath)
     elseif string.match(filepath, "%.txt$") then
         for line in content:gmatch("[^\n]+") do
             line = line:match("^%s*(.-)%s*$")
-            if line ~= "" then table.insert(patterns, line) end
+            if line ~= "" then
+                table.insert(patterns, line)
+            end
         end
     end
+
     return patterns
 end
 
@@ -76,12 +83,17 @@ local black_patterns = load_blacklist_patterns(blacklist_file)
 
 function is_blacklisted(str, patterns)
     for _, pattern in ipairs(patterns) do
-        local ok, result = pcall(function() return str:match(pattern) end)
-        if ok and result then return true, pattern end
+        local ok, result = pcall(function()
+            return str:match(pattern)
+        end)
+        if ok and result then
+            return true, pattern
+        end
     end
     return false
 end
 
+-- 简繁转换
 local function convert(text, dict)
     return text:gsub("[%z\1-\127\194-\244][\128-\191]*", function(c)
         return dict[c] or c
@@ -113,12 +125,17 @@ local function ch_convert_cached(text)
     ch_cache_keys[#ch_cache_keys + 1] = text
 
     if #ch_cache_keys > ch_cache_max then
-        ch_convert_cache = {}
-        ch_cache_keys = {}
+        local remove_count = math.floor(ch_cache_max / 2)
+        for i = 1, remove_count do
+            local k = table.remove(ch_cache_keys, 1)
+            ch_convert_cache[k] = nil
+        end
     end
+
     return converted
 end
 
+-- 合并重复弹幕
 local function merge_duplicate_danmaku(danmakus, threshold)
     if not threshold or tonumber(threshold) < 0 then return danmakus end
 
@@ -137,17 +154,28 @@ local function merge_duplicate_danmaku(danmakus, threshold)
         local i = 1
         while i <= #group do
             local base = group[i]
+            local times = { base.time }
             local count = 1
             local j = i + 1
-            local same_time = true
             while j <= #group and abs(group[j].time - base.time) <= threshold do
-                if group[j].time ~= base.time then same_time = false end
+                times[#times + 1] = group[j].time
                 count = count + 1
                 j = j + 1
             end
+            local same_time = true
+            for k = 2, #times do
+                if times[k] ~= times[1] then
+                    same_time = false
+                    break
+                end
+            end
             local danmaku = {
-                time = base.time, type = base.type, size = base.size,
-                color = base.color, text = base.text, source = base.source,
+                time = base.time,
+                type = base.type,
+                size = base.size,
+                color = base.color,
+                text = base.text,
+                source = base.source,
                 orig_time = base.orig_time,
             }
             if count > 2 or not same_time then
@@ -161,8 +189,11 @@ local function merge_duplicate_danmaku(danmakus, threshold)
     return merged
 end
 
+-- 限制每屏弹幕条数
 local function limit_danmaku(danmakus, limit)
-    if not limit or limit <= 0 then return danmakus end
+    if not limit or limit <= 0 then
+        return danmakus
+    end
     local window = {}
     for _, d in ipairs(danmakus) do
         for i = #window, 1, -1 do
@@ -189,11 +220,14 @@ local function limit_danmaku(danmakus, limit)
     end
     local result = {}
     for _, d in ipairs(danmakus) do
-        if not d.drop then table.insert(result, d) end
+        if not d.drop then
+            table.insert(result, d)
+        end
     end
     return result
 end
 
+-- 解析 XML 弹幕
 local function parse_xml_danmaku(xml_string)
     local danmakus = {}
     for p_attr, text in xml_string:gmatch('<d%s+[^>]*%f[^%s]p="([^"]+)"[^>]*>([^<]+)</d>') do
@@ -212,6 +246,7 @@ local function parse_xml_danmaku(xml_string)
     return danmakus
 end
 
+-- 解析 JSON 弹幕
 local function parse_json_danmaku(json_string)
     local danmakus = {}
     if json_string:sub(1, 3) == "\239\187\191" then
@@ -230,9 +265,9 @@ local function parse_json_danmaku(json_string)
             if params[1] and params[2] and params[3] and params[4] then
                 table.insert(danmakus, {
                     time  = params[1],
-                    color = params[2] or 0xFFFFFF,
-                    type  = params[3] or 1,
-                    size  = params[4] or 25,
+                    type  = params[2] or 1,
+                    size  = params[3] or 25,
+                    color = params[4] or 0xFFFFFF,
                     text  = decode_html_entities(text),
                 })
             end
@@ -242,6 +277,7 @@ local function parse_json_danmaku(json_string)
     return danmakus
 end
 
+-- 解析弹幕文件
 function parse_danmaku_file(danmaku_input)
     local content = read_file(danmaku_input)
     if not content then
@@ -266,13 +302,12 @@ function parse_danmaku_file(danmaku_input)
     return danmakus
 end
 
+-- 弹幕数组与布局算法
 local DanmakuArray = {}
 DanmakuArray.__index = DanmakuArray
 
 function DanmakuArray:new(res_x, res_y, font_size)
     local obj = {
-        solution_y = res_y,
-        font_size = font_size,
         rows = math.floor(res_y / font_size),
         time_length_array = {}
     }
@@ -311,21 +346,8 @@ function DanmakuArray:is_empty(row)
 end
 
 -- 滚动弹幕 Y 坐标算法
--- 通过 layout_overflow 控制：
---   0     = 严格模式（原逻辑，丢弃高）
---   0.5   = 允许尾部最多重叠 ~1.5 字符宽
---   0.75  = 允许尾部最多重叠 ~2.25 字符宽（推荐）
---   1.0   = 允许尾部最多重叠 3 字符宽（最宽松）
 function get_position_y(font_size, appear_time, text_length, resolution_x, roll_time, array)
     local velocity = (text_length + resolution_x) / roll_time
-    local overflow = tonumber(options.layout_overflow) or 0
-    if overflow < 0 then overflow = 0 elseif overflow > 1 then overflow = 1 end
-
-    -- delta_time 阈值放宽：overflow=1 时约为 roll_time*0.5
-    local roll_threshold = roll_time * (1 - overflow * 0.5)
-    -- delta_x 允许负值：overflow=1 时最多允许 3 个字符宽度的尾部重叠
-    local overlap_allowance = font_size * overflow * 3
-
     for i = 1, array.rows do
         local previous_appear_time = array:get_time(i)
         if array:is_empty(i) then
@@ -336,45 +358,34 @@ function get_position_y(font_size, appear_time, text_length, resolution_x, roll_
         local previous_velocity = (previous_length + resolution_x) / roll_time
         local delta_velocity = velocity - previous_velocity
         local delta_x = (appear_time - previous_appear_time) * previous_velocity - previous_length
-
-        -- ① 完全无重叠：保持原逻辑
         if delta_x >= 0 then
             if delta_velocity <= 0 then
                 array:set_time_length(i, appear_time, text_length)
                 return 1 + (i - 1) * font_size
             end
             local delta_time = delta_x / delta_velocity
-            if delta_time >= roll_threshold then
+            if delta_time >= roll_time then
                 array:set_time_length(i, appear_time, text_length)
                 return 1 + (i - 1) * font_size
             end
-
-        -- ② 短暂重叠 + 前一条弹幕更快或同速：允许
-        elseif delta_x >= -overlap_allowance and delta_velocity <= 0 then
-            array:set_time_length(i, appear_time, text_length)
-            return 1 + (i - 1) * font_size
         end
-        -- ③ delta_x < 0 且新弹幕更快：拒绝（会持续追赶）
     end
     return nil
 end
 
+-- 固定弹幕 Y 坐标算法
 function get_fixed_y(font_size, appear_time, fixtime, array, from_top)
     local row_start = from_top and 1 or array.rows
     local row_end   = from_top and array.rows or 1
     local row_step  = from_top and 1 or -1
-    local overflow = tonumber(options.layout_overflow) or 0
-    if overflow < 0 then overflow = 0 elseif overflow > 1 then overflow = 1 end
-    -- overflow=1 时，允许等待时间缩短到 fixtime*0.4
-    local threshold = fixtime * (1 - overflow * 0.6)
-
     for i = row_start, row_end, row_step do
         local previous_appear_time = array:get_time(i)
         if array:is_empty(i) then
             array:set_time_length(i, appear_time, 0)
             return (i - 1) * font_size + 1
         else
-            if (appear_time - previous_appear_time) >= threshold then
+            local delta_time = appear_time - previous_appear_time
+            if delta_time > fixtime then
                 array:set_time_length(i, appear_time, 0)
                 return (i - 1) * font_size + 1
             end
@@ -383,6 +394,7 @@ function get_fixed_y(font_size, appear_time, fixtime, array, from_top)
     return nil
 end
 
+-- 将弹幕转换为 ASS 事件（核心函数）
 function convert_danmaku_to_ass_events(force)
     local per_source_lists = {}
     for url, source in pairs(DANMAKU.sources) do
@@ -405,8 +417,21 @@ function convert_danmaku_to_ass_events(force)
                 local segs = segments or {}
                 local pre = prefix or {}
                 if #segs == 0 then return 0 end
-                local idx = binary_search(segs, t, function(s) return (s and s.start) or 0 end)
-                local target = idx - 1
+
+                -- 二分查找最后一个 start <= t 的段
+                local lo, hi = 1, #segs
+                local target = 0
+                while lo <= hi do
+                    local mid = math.floor((lo + hi) / 2)
+                    local seg_start = (segs[mid] and segs[mid].start) or 0
+                    if seg_start <= t then
+                        target = mid
+                        lo = mid + 1
+                    else
+                        hi = mid - 1
+                    end
+                end
+
                 if target < 1 then return 0 end
                 return pre[target] or 0
             end
@@ -417,9 +442,13 @@ function convert_danmaku_to_ass_events(force)
                 if d.orig_time == nil then d.orig_time = base_time end
                 local adjusted_time = base_time + get_cached_delay(base_time)
                 local entry = {
-                    orig_time = d.orig_time, time = adjusted_time,
-                    type = d.type, size = d.size, color = d.color,
-                    text = d.text, source = url,
+                    orig_time = d.orig_time,
+                    time = adjusted_time,
+                    type = d.type,
+                    size = d.size,
+                    color = d.color,
+                    text = d.text,
+                    source = url,
                 }
                 if not is_blacklisted(d.text, black_patterns) then
                     table.insert(list, entry)
@@ -472,7 +501,7 @@ function convert_danmaku_to_ass_events(force)
         msg.info("已解析 " .. #danmakus .. " 条弹幕")
     end
 
-    local fontsize = tonumber(options.fontsize) or 50
+    local fontsize = tonumber(options.fontsize) or 36
     local scrolltime = tonumber(options.scrolltime) or 15
     local fixtime = tonumber(options.fixtime) or 5
     local res_x = 1920
@@ -555,12 +584,10 @@ function convert_danmaku_to_ass_events(force)
 
         if style and effect then
             text = effect .. color_text .. text
-			local has_fs = text:find("\\fs", 1, true) ~= nil
             local event = {
                 orig_time = ev.orig_time,
                 start_time = ev.start_time,
                 end_time = ev.end_time,
-                delay = ev.start_time - (ev.orig_time or ev.start_time),
                 style = style,
                 text = text,
                 clean_text = clean_text,
@@ -568,6 +595,7 @@ function convert_danmaku_to_ass_events(force)
                 move = move,
                 source = d.source,
             }
+
             if move then
                 event.text_no_move = text:gsub("\\move%(.-%)", "")
             end

@@ -7,7 +7,6 @@
 -- =============================================================================
 
 local mp = require "mp"
-local common = require "common"
 mp.options = require "mp.options"
 mp.utils = require "mp.utils"
 
@@ -19,6 +18,7 @@ local batch   = require "batch"
 local options = {
 
 	load = true,
+
 
 	-- 单帧模式
 	backend = "mpv",
@@ -32,8 +32,7 @@ local options = {
 	overlay_id = 10,
 
 	spawn_first = false,
-	prewarm = true,
-	quit_after_inactivity = 60,
+	quit_after_inactivity = 0,
 	network = false,
 	audio = false,
 	direct_io = true,
@@ -67,7 +66,7 @@ if options.load == false then
 	mp.msg.info("脚本已被初始化禁用")
 	return
 end
-
+-- 原因：--load-osd-console 重命名为 --load-console
 local min_major = 0
 local min_minor = 40
 local min_patch = 0
@@ -101,58 +100,70 @@ if options.backend == "mpv" then
 	end
 	options.socket = options.socket .. unique
 
+	-- 初始化 winapi（可能禁用 direct_io）
 	winapi.init(options, os_name)
 end
 
+-- 共享状态表
 local state = {
+	-- IPC / file handles
 	file = nil,
 	file_bytes = 0,
 
+	-- process state
 	spawned = false,
 	disabled = false,
 	spawn_waiting = false,
+	spawn_working = false,
 	script_written = false,
 
+	-- dirty flag for property change batching
 	dirty = false,
 
+	-- cursor position
 	x = nil, y = nil,
 	last_x = nil, last_y = nil,
 
+	-- seek
 	last_seek_time = nil,
 
+	-- dimensions
 	effective_w = options.max_width,
 	effective_h = options.max_height,
 	real_w = nil, real_h = nil,
 	last_real_w = nil, last_real_h = nil,
 
+	-- video state
 	script_name = nil,
 	show_thumbnail = false,
 	has_vid = 0,
 	last_has_vid = 0,
 
+	-- toggle
 	auto_run = true,
 
+	-- info timer
 	info_timer = nil,
-	info_pending_w = nil,
-	info_pending_h = nil,
 
+	-- properties table (observed mpv properties cache)
 	properties = {},
 
+	-- timers (will be set below)
 	activity_timer = nil,
-	prewarm_timer = nil,
 
+	-- remove_thumbnail_files callback (set below, used by process.spawn)
 	remove_thumbnail_files = nil,
 }
 
+-- OSC Preview API 状态
 local preview_draw = nil
 local preview_ass = mp.create_osd_overlay("ass-events")
 
-local thumb_pending = nil
-local thumb_debounce = nil
-
+-- 初始化 process 模块
 process.init(state, options, os_name, winapi)
 process.init_seek()
 
+-- 初始化 batch 模块
 batch.init(options, os_name)
 
 
@@ -160,24 +171,25 @@ batch.init(options, os_name)
 -- 显示 广播
 -- =============================================================================
 
+-- 批量模式配置独立广播
 local function bat_info()
-	common.send_json(nil, "thumb_engine-bat-info", {
+	local json = mp.utils.format_json({
 		bat_width = options.bat_width,
 		bat_height = options.bat_height,
 		bat_overlay_ids = options.bat_overlay_ids,
 		bat_path = options.bat_path,
 	})
+	mp.command_native_async({"script-message", "thumb_engine-bat-info", json}, function() end)
 end
 
 state.remove_thumbnail_files = function() helper.remove_thumbnail_files(state, options) end
 
-local function compute_disabled(w, h)
+local function info(w, h)
 	local short_video = mp.get_property_number("duration", 0) <= options.min_duration
-	local image = state.properties["current-tracks/video"]
-		and state.properties["current-tracks/video"]["image"]
+	local image = state.properties["current-tracks/video"] and state.properties["current-tracks/video"]["image"]
 	local albumart = image and state.properties["current-tracks/video"]["albumart"]
 
-	local disabled = (w or 0) == 0 or (h or 0) == 0 or
+	state.disabled = (w or 0) == 0 or (h or 0) == 0 or
 		state.has_vid == 0 or
 		(state.properties["demuxer-via-network"] and not options.network) or
 		(albumart and not options.audio) or
@@ -185,61 +197,24 @@ local function compute_disabled(w, h)
 		(short_video and options.min_duration > 0)
 
 	if not state.auto_run then
-		disabled = true
+		state.disabled = true
 	end
-	return disabled
-end
 
-local function broadcast_info(w, h, disabled)
-	common.send_json(nil, "thumb_engine-info", {
-		width = w, height = h,
-		disabled = disabled, available = true,
-		socket = options.socket, tnpath = options.tnpath,
-		overlay_id = options.overlay_id,
-	})
-	mp.set_property_native("user-data/mpv/thumbnailer/enabled", not disabled)
-end
-
-local function kill_info_timer()
 	if state.info_timer then
 		state.info_timer:kill()
 		state.info_timer = nil
+	elseif state.has_vid == 0 or not state.disabled then
+		state.info_timer = mp.add_timeout(0.05, function() info(w, h) end)
 	end
-end
 
-local function info(w, h)
-	state.disabled = compute_disabled(w, h)
+	local json, err = mp.utils.format_json({
+		width=w, height=h, disabled=state.disabled, available=true,
+		socket=options.socket, tnpath=options.tnpath, overlay_id=options.overlay_id,
+	})
+	mp.command_native_async({"script-message", "thumb_engine-info", json}, function() end)
 
-	state.info_pending_w = w
-	state.info_pending_h = h
-
-	kill_info_timer()
-
-	local should_debounce = (state.has_vid == 0) or (not state.disabled)
-
-	if should_debounce then
-		state.info_timer = mp.add_timeout(0.05, function()
-			state.info_timer = nil
-			local pw, ph = state.info_pending_w, state.info_pending_h
-			broadcast_info(pw, ph, compute_disabled(pw, ph))
-		end)
-	else
-		broadcast_info(w, h, state.disabled)
-	end
-end
-
-local last_draw = {
-	x = nil, y = nil,
-	w = nil, h = nil,
-	file = nil,
-	mtime = nil, size = nil,
-}
-
-local function reset_last_draw()
-	last_draw.x, last_draw.y = nil, nil
-	last_draw.w, last_draw.h = nil, nil
-	last_draw.file = nil
-	last_draw.mtime, last_draw.size = nil, nil
+	-- OSC Preview API: 通知 osc 缩略图引擎是否可用
+	mp.set_property_native("user-data/mpv/thumbnailer/enabled", not state.disabled)
 end
 
 local function draw(w, h, script)
@@ -248,33 +223,13 @@ local function draw(w, h, script)
 	if state.x ~= nil then
 		local cmd_x, cmd_y = state.x, state.y
 		local cmd_w, cmd_h = nil, nil
-		local preview = preview_draw and preview_draw.x and preview_draw.y
-			and preview_draw.w and preview_draw.h
+		local preview = preview_draw and preview_draw.x and preview_draw.y and preview_draw.w and preview_draw.h
 		if preview then
 			cmd_x, cmd_y = preview_draw.x, preview_draw.y
 			cmd_w, cmd_h = preview_draw.w, preview_draw.h
 		end
-
-		local file = options.tnpath .. ".bgra"
-		local finfo = mp.utils.file_info(file)
-		local mtime = finfo and finfo.mtime or 0
-		local size  = finfo and finfo.size  or 0
-
-		local pos_changed  = last_draw.x ~= cmd_x or last_draw.y ~= cmd_y
-		local size_changed = last_draw.w ~= w or last_draw.h ~= h
-		local file_changed = last_draw.file ~= file
-			or last_draw.mtime ~= mtime
-			or last_draw.size  ~= size
-
-		if pos_changed or size_changed or file_changed then
-			common.overlay_add(options.overlay_id, cmd_x, cmd_y, file, w, h,
-				{ dw = cmd_w, dh = cmd_h })
-			last_draw.x, last_draw.y = cmd_x, cmd_y
-			last_draw.w, last_draw.h = w, h
-			last_draw.file = file
-			last_draw.mtime, last_draw.size = mtime, size
-		end
-
+		-- 旧版使用的异步调用可能会导致个别缩略图异常
+		mp.command_native({name = "overlay-add", id=options.overlay_id, x=cmd_x, y=cmd_y, file=options.tnpath..".bgra", offset=0, fmt="bgra", w=w, h=h, stride=(4*w), dw=cmd_w, dh=cmd_h})
 		if preview then
 			local ass = preview_draw.ass or ""
 			local osd_w, osd_h = mp.get_osd_size()
@@ -286,34 +241,9 @@ local function draw(w, h, script)
 			end
 		end
 	elseif script then
-		common.send_json(script, "thumb_engine-render", {
-			width = w, height = h,
-			x = state.x, y = state.y,
-			socket = options.socket,
-			tnpath = options.tnpath,
-			overlay_id = options.overlay_id,
-		})
+		local json, err = mp.utils.format_json({width=w, height=h, x=state.x, y=state.y, socket=options.socket, tnpath=options.tnpath, overlay_id=options.overlay_id})
+		mp.commandv("script-message-to", script, "thumb_engine-render", json)
 	end
-end
-
-local draw_pending = false
-local draw_throttle_timer = mp.add_timeout(1/40, function()
-	if draw_pending then
-		draw_pending = false
-		if state.show_thumbnail then
-			draw(state.real_w, state.real_h, state.script_name)
-		end
-	end
-end)
-draw_throttle_timer:kill()
-
-local function request_draw(w, h, script)
-	if draw_throttle_timer:is_enabled() then
-		draw_pending = true
-		return
-	end
-	draw(w, h, script)
-	draw_throttle_timer:resume()
 end
 
 -- =============================================================================
@@ -321,7 +251,7 @@ end
 -- =============================================================================
 
 local file_timer
-local file_check_period = 1/30
+local file_check_period = 1/60
 
 file_timer = mp.add_periodic_timer(file_check_period, function()
 	local w, h = helper.check_new_thumb(options, state, os_name)
@@ -345,34 +275,9 @@ file_timer:kill()
 
 local activity_timer
 
--- prewarm：等影响 vf_gen 的属性稳定后再 spawn
-local function prewarm_spawn()
-	if state.spawned or state.disabled then return end
-	local vp = state.properties["video-params"]
-	if not vp or not vp.w or not vp.h then return end
-	if not state.properties["path"] then return end
-	if not state.properties["current-tracks/video"] then return end
-	process.spawn(mp.get_property_number("time-pos", 0) or 0)
-end
-
-state.prewarm_timer = mp.add_timeout(0.3, prewarm_spawn)
-state.prewarm_timer:kill()
-
-local function schedule_prewarm()
-	if not options.prewarm or options.backend ~= "mpv" then return end
-	if state.spawned or state.disabled then return end
-	state.prewarm_timer:kill()
-	state.prewarm_timer:resume()
-end
-
 local function clear(force_overlay_remove)
-	thumb_pending = nil
-	if thumb_debounce then
-		thumb_debounce:kill()
-	end
 	file_timer:kill()
 	process.kill_seek_timer()
-	reset_last_draw()
 	if options.quit_after_inactivity > 0 then
 		if state.show_thumbnail or activity_timer:is_enabled() then
 			activity_timer:kill()
@@ -384,7 +289,7 @@ local function clear(force_overlay_remove)
 	state.last_y = nil
 	preview_ass:remove()
 	if state.script_name and not force_overlay_remove then return end
-	common.overlay_remove(options.overlay_id)
+	mp.command_native_async({name = "overlay-remove", id=options.overlay_id}, function() end)
 end
 
 local function quit()
@@ -403,13 +308,11 @@ activity_timer = mp.add_timeout(options.quit_after_inactivity, quit)
 activity_timer:kill()
 state.activity_timer = activity_timer
 
--- ===========================================================
+-- =============================================================================
 -- 消息处理
--- ===========================================================
+-- =============================================================================
 
-thumb_pending = nil
-
-local function thumb_impl(time, r_x, r_y, script)
+local function thumb(time, r_x, r_y, script)
 	if state.disabled then return end
 
 	time = tonumber(time)
@@ -421,24 +324,15 @@ local function thumb_impl(time, r_x, r_y, script)
 		state.x, state.y = math.floor(r_x + 0.5), math.floor(r_y + 0.5)
 	end
 
-	local nx = math.floor((r_x == "" and 0 or tonumber(r_x) or 0) + 0.5)
-	local ny = math.floor((r_y == "" and 0 or tonumber(r_y) or 0) + 0.5)
-	if state.show_thumbnail
-		and state.last_x == nx
-		and state.last_y == ny
-		and state.last_seek_time
-		and math.abs(time - state.last_seek_time) < 0.05 then
-		return
-	end
-
 	local was_showing = state.show_thumbnail
 
 	state.script_name = script
 	if state.last_x ~= state.x or state.last_y ~= state.y or not state.show_thumbnail then
 		state.show_thumbnail = true
 		state.last_x, state.last_y = state.x, state.y
+		-- 从清除状态恢复时不绘制过期的旧缩略图，等待新帧生成
 		if was_showing then
-			request_draw(state.real_w, state.real_h, script)
+			draw(state.real_w, state.real_h, script)
 		end
 	end
 
@@ -449,30 +343,15 @@ local function thumb_impl(time, r_x, r_y, script)
 		activity_timer:resume()
 	end
 
+	-- 时间差极小时跳过重新seek（含相等情形），避免关键帧seek导致缩略图跳变
 	if state.last_seek_time and math.abs(time - state.last_seek_time) < 0.05 then
-		if not was_showing then request_draw(state.real_w, state.real_h, script) end
+		if not was_showing then draw(state.real_w, state.real_h, script) end
 		return
 	end
 	state.last_seek_time = time
 	if not state.spawned then process.spawn(time) end
 	process.request_seek()
 	if not file_timer:is_enabled() then file_timer:resume() end
-end
-
-thumb_debounce = mp.add_timeout(0.025, function()
-	if thumb_pending then
-		local args = thumb_pending
-		thumb_pending = nil
-		thumb_impl(args.time, args.r_x, args.r_y, args.script)
-	end
-end)
-thumb_debounce:kill()
-
-local function thumb(time, r_x, r_y, script)
-	thumb_pending = { time = time, r_x = r_x, r_y = r_y, script = script }
-	if not thumb_debounce:is_enabled() then
-		thumb_debounce:resume()
-	end
 end
 
 -- =============================================================================
@@ -512,10 +391,9 @@ local function watch_changes()
 		info(state.effective_w, state.effective_h)
 	end
 
-	schedule_prewarm()
-
 	if state.spawned then
 		if resized then
+			-- mpv doesn't allow us to change output size
 			local seek_time = state.last_seek_time
 			process.run("quit")
 			clear()
@@ -543,6 +421,7 @@ local function update_property_dirty(name, value)
 end
 
 local function update_tracklist(name, value)
+	-- current-tracks shim
 	for _, track in ipairs(value) do
 		if track.type == "video" and track.selected then
 			state.properties["current-tracks/video"] = track
@@ -586,13 +465,15 @@ local function file_load(skip_batch_cancel)
 	state.real_w, state.real_h = nil, nil
 	state.last_real_w, state.last_real_h = nil, nil
 	state.last_seek_time = nil
-	kill_info_timer()
+	if state.info_timer then
+		state.info_timer:kill()
+		state.info_timer = nil
+	end
 
 	helper.calc_dimensions(state, options)
 	info(state.effective_w, state.effective_h)
 
-	schedule_prewarm()
-
+	-- always 模式：延迟启动预填充，等待初始属性变化（分辨率等）稳定
 	if options.cache_iframe == "always" and options.backend == "ffmpeg" then
 		mp.add_timeout(1, function()
 			if state.disabled then return end
@@ -606,22 +487,12 @@ end
 
 local function shutdown()
 	batch.batch_cancel(true)
-	if state.prewarm_timer then
-		state.prewarm_timer:kill()
-	end
 	process.run("quit")
-	if state.file then
-		state.file:close()
-		state.file = nil
-		state.file_bytes = 0
+	helper.remove_thumbnail_files(state, options)
+	if options.backend == "mpv" and os_name ~= "windows" then
+		os.remove(options.socket)
+		os.remove(options.socket..".run")
 	end
-	mp.add_timeout(0.3, function()
-		helper.remove_thumbnail_files(state, options)
-		if options.backend == "mpv" and os_name ~= "windows" then
-			os.remove(options.socket)
-			os.remove(options.socket..".run")
-		end
-	end)
 end
 
 -- =============================================================================
@@ -630,7 +501,6 @@ end
 
 mp.observe_property("current-tracks/video", "native", function(name, value)
 	update_property(name, value)
-	schedule_prewarm()
 end)
 
 mp.observe_property("track-list", "native", update_tracklist)
@@ -643,10 +513,13 @@ mp.observe_property("path", "native", update_property)
 mp.observe_property("vid", "native", sync_changes)
 mp.observe_property("edition", "native", sync_changes)
 
+-- OSC Preview API 的 draw-preview
 mp.observe_property("user-data/osc/draw-preview", "native", preview_update_draw)
 
+-- thumbfast api兼容接口
 mp.register_script_message("thumb", thumb)
 mp.register_script_message("clear", clear)
+-- 防脚本消息歧义的接口
 mp.register_script_message("thumbnail_gen", thumb)
 mp.register_script_message("thumbnail_clr", clear)
 
@@ -656,6 +529,7 @@ mp.register_event("file-loaded", function()
 end)
 mp.register_event("shutdown", shutdown)
 
+-- 响应外部主动查询
 mp.register_script_message("thumb_engine-bat-info?", function() bat_info() end)
 
 mp.add_key_binding(nil, "thumb_rerun", function()
@@ -699,6 +573,7 @@ mp.register_script_message("thumbnail_hwdec", function(hwdec_api)
 	file_load(true)
 end)
 
+-- 批量帧提取消息
 mp.register_script_message("batch_gen", function(json_str)
 	local params = mp.utils.parse_json(json_str)
 	if not params then return end

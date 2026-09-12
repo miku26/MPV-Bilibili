@@ -1,5 +1,4 @@
 local mp = require "mp"
-local common = require "common"
 mp.utils = require "mp.utils"
 
 local M = {}
@@ -27,11 +26,11 @@ local frame_cache = {}             -- { [time_key] = raw_data_string }
 local cache_order = {}             -- 插入顺序，用于 FIFO 淘汰
 local cache_quantize = 5           -- 间隔（秒），同一区间内的请求映射到同一个 key
 
--- 预填充状态
-local prefill_ids = {}
+-- 预填充状态（提前声明，避免 cache_clear 引用到全局变量）
+local prefill_ids = {}      -- 正在运行的异步 ID 集合
 local prefill_queue = {}
 local prefill_src_path = nil
-local prefill_workers = 0
+local prefill_workers = 0   -- 当前活跃的 worker 数
 local prefill_stop
 
 local function cache_key(time)
@@ -95,20 +94,18 @@ function M.init(_state, _options, _os_name, _winapi)
 end
 
 function M.subprocess(args, async, callback)
-	if async then
-		return common.subprocess(args, {
-			async = true,
-			callback = callback,
-			playback_only = true,
-			env_path = (os_name == "darwin"),
-		})
+	callback = callback or function() end
+	local command1 = { name = "subprocess", args = args, playback_only = true, }
+	local command2 = { name = "subprocess", args = args, playback_only = false, capture_stdout = true, }
+
+	if os_name == "darwin" then
+		command1.env = "PATH=" .. os.getenv("PATH")
+		command2.env = "PATH=" .. os.getenv("PATH")
 	end
 
-	return common.subprocess(args, {
-		playback_only = false,
-		capture_stdout = true,
-		env_path = (os_name == "darwin"),
-	})
+	return async and
+		mp.command_native_async(command1, callback) or
+		mp.command_native(command2)
 end
 
 local function vf_gen()
@@ -185,21 +182,23 @@ local function spawn_mpv(time)
 
 	if os_name == "windows" then
 		table.insert(args, "--media-controls=no")
-		table.insert(args, "--input-ipc-server=" .. options.socket)
-	else
-		local client_script_path = options.socket .. ".run"
-		if not state.script_written then
-			local f = io.open(client_script_path, "w+")
-			if not f then
-				mp.msg.error("client script write failed")
-				return
-			end
-			f:write(string.format(client_script, options.socket))
-			f:close()
+		table.insert(args, "--input-ipc-server="..options.socket)
+	elseif not state.script_written then
+		local client_script_path = options.socket..".run"
+		local script = io.open(client_script_path, "w+")
+		if script == nil then
+			mp.msg.error("client script write failed")
+			return
+		else
 			state.script_written = true
+			script:write(string.format(client_script, options.socket))
+			script:close()
 			M.subprocess({"chmod", "+x", client_script_path}, true)
+			table.insert(args, "--scripts="..client_script_path)
 		end
-		table.insert(args, "--scripts=" .. client_script_path)
+	else
+		local client_script_path = options.socket..".run"
+		table.insert(args, "--scripts="..client_script_path)
 	end
 
 	table.insert(args, "--")
@@ -210,13 +209,17 @@ local function spawn_mpv(time)
 
 	M.subprocess(args, true,
 		function(success, result)
-			-- 子进程退出：重置全部运行状态
-			state.spawned = false
-			state.spawn_waiting = false
-			if success == false or not result
-				or (result.status ~= 0 and result.status ~= -2) then
+			if success == false or (result.status ~= 0 and result.status ~= -2) then
+				state.spawned = false
+				state.spawn_waiting = false
 				mp.msg.error("mpv subprocess create failed")
-				mp.commandv("show-text", "thumb_engine 子进程创建失败！", 5)
+				if not state.spawn_working then
+					mp.commandv("show-text", "thumb_engine 子进程创建失败！", 5)
+				end
+			elseif success == true then
+				state.spawned = false
+				state.spawn_working = true
+				state.spawn_waiting = false
 			end
 		end
 	)
@@ -231,6 +234,7 @@ local function spawn_ffmpeg(time)
 		cache_clear()
 		ffmpeg_src_path = nil
 		state.spawned = false
+		state.spawn_working = false
 		return
 	end
 
@@ -248,6 +252,7 @@ local function spawn_ffmpeg(time)
 	end
 	ffmpeg_src_path = path
 	state.spawned = true
+	state.spawn_working = true
 end
 
 function M.spawn(time)
@@ -268,32 +273,53 @@ local seek_period_counter = 0
 local seek_timer
 
 local function seek_mpv(fast)
-	if not state.last_seek_time then return end
-
-	local mode
-	if precise_cur == 2 then
-		mode = "absolute+exact"
-	elseif precise_cur == 1 then
-		mode = "absolute+keyframes"
-	else
-		mode = fast and "absolute+keyframes" or "absolute+exact"
+	if state.last_seek_time then
+		if precise_cur == 2 then M.run("async seek " .. state.last_seek_time .. " absolute+exact")
+		elseif precise_cur == 1 then M.run("async seek " .. state.last_seek_time .. " absolute+keyframes")
+		elseif precise_cur == 0 then
+			M.run("async seek " .. state.last_seek_time .. (fast and " absolute+keyframes" or " absolute+exact"))
+		end
 	end
-
-	M.run("async seek " .. state.last_seek_time .. " " .. mode)
 end
 
 local function build_ffmpeg_args(seek_time, use_keyframe)
-	local args = common.ffmpeg_base_args(ffmpeg_path)
-	common.append_args(args, common.ffmpeg_fast_input_args())
-	common.append_args(args, common.ffmpeg_hwaccel_args(options.hwdec, os_name))
+	local args = {
+		ffmpeg_path,
+		"-loglevel", "quiet",
+		"-analyzeduration", "0",
+		"-probesize", "128000",
+		"-skip_loop_filter", "all",
+		"-skip_idct", "all",
+		"-flags2", "fast",
+	}
 
+	if options.hwdec ~= "no" then
+		table.insert(args, "-hwaccel")
+		if options.hwdec == "yes" or options.hwdec == "auto" then
+			if os_name == "windows" then
+				table.insert(args, "d3d11va")
+			elseif os_name == "darwin" then
+				table.insert(args, "videotoolbox")
+			else
+				table.insert(args, "auto")
+			end
+		else
+			table.insert(args, options.hwdec)
+		end
+	end
+
+	local vf
 	local dvp = mp.get_property_number("current-tracks/video/dolby-vision-profile", 0)
 	local hdr = mp.get_property_number("video-params/sig-peak", 1)
-	local vf = common.build_scale_vf(state.effective_w, state.effective_h, {
-		dvp = dvp,
-		hdr = hdr,
-		dvp_any = true,
-	})
+	local scale = "scale=" .. state.effective_w .. ":" .. state.effective_h .. ":flags=fast_bilinear"
+
+	if dvp > 0 then
+		vf = scale .. ",libplacebo=colorspace=bt709:color_primaries=bt709:color_trc=bt709:gamut_mode=desaturate:tonemapping=spline"
+	elseif hdr > 1 then
+		vf = scale .. ",zscale=t=linear:npl=150,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=4.0,zscale=t=bt709:m=bt709:r=tv"
+	else
+		vf = scale
+	end
 
 	if use_keyframe then
 		table.insert(args, "-noaccurate_seek")
@@ -304,7 +330,7 @@ local function build_ffmpeg_args(seek_time, use_keyframe)
 	table.insert(args, "-i")
 	table.insert(args, ffmpeg_src_path)
 
-	common.append_args(args, {
+	local append = {
 		"-threads", tostring(options.sw_threads),
 		"-vframes", "1",
 		"-an", "-sn", "-dn",
@@ -312,18 +338,24 @@ local function build_ffmpeg_args(seek_time, use_keyframe)
 		"-pix_fmt", "bgra",
 		"-f", "rawvideo",
 		"pipe:1",
-	})
+	}
+	for _, v in ipairs(append) do table.insert(args, v) end
 
 	return args
 end
 
 local function build_ffmpeg_command(args)
-	return common.ffmpeg_command(args, {
+	local command = {
+		name = "subprocess",
+		args = args,
 		playback_only = true,
 		capture_stdout = true,
 		capture_size = state.effective_w * state.effective_h * 4 + 4096,
-		env_path = (os_name == "darwin"),
-	})
+	}
+	if os_name == "darwin" then
+		command.env = "PATH=" .. os.getenv("PATH")
+	end
+	return command
 end
 
 -- =============================================================================
@@ -340,7 +372,6 @@ prefill_stop = function()
 end
 
 local function prefill_worker()
-	if prefill_workers <= 0 then return end
 	while #prefill_queue > 0 do
 		if not ffmpeg_src_path or ffmpeg_src_path ~= prefill_src_path then
 			break
@@ -364,6 +395,7 @@ local function prefill_worker()
 			prefill_ids[id] = true
 			return
 		end
+		-- 已缓存，跳过继续取下一个
 	end
 
 	-- 队列耗尽或被中断
@@ -509,22 +541,18 @@ end
 -- run (IPC)
 -- =============================================================================
 
--- 管道未就绪时缓存的命令
-local pending_commands = {}
+local function run_mpv(command)
+	if not state.spawned then return end
 
--- 尝试写入一条命令；返回 true 表示成功
-local function run_mpv_try_write(command)
 	if options.direct_io then
 		local hPipe = winapi.C.CreateFileW(winapi.socket_wc, winapi.GENERIC_WRITE, 0, nil, winapi.OPEN_EXISTING, winapi._createfile_pipe_flags, nil)
-		if hPipe == winapi.INVALID_HANDLE_VALUE then
-			return false
+		if hPipe ~= winapi.INVALID_HANDLE_VALUE then
+			local buf = command .. "\n"
+			winapi.C.SetNamedPipeHandleState(hPipe, winapi.PIPE_NOWAIT, nil, nil)
+			winapi.C.WriteFile(hPipe, buf, #buf + 1, winapi._lpNumberOfBytesWritten, nil)
+			winapi.C.CloseHandle(hPipe)
 		end
-		local buf = command .. "\n"
-		winapi.C.SetNamedPipeHandleState(hPipe, winapi.PIPE_NOWAIT, nil, nil)
-		-- 修复：不写 NUL 字节，并检查 WriteFile 返回值
-		local ok = winapi.C.WriteFile(hPipe, buf, #buf, winapi._lpNumberOfBytesWritten, nil)
-		winapi.C.CloseHandle(hPipe)
-		return ok and true or false
+		return
 	end
 
 	local command_n = command.."\n"
@@ -545,52 +573,6 @@ local function run_mpv_try_write(command)
 		state.file_bytes = state.file:seek("end")
 		state.file:write(command_n)
 		state.file:flush()
-		return true
-	end
-	return false
-end
-
--- 重试定时器：管道未就绪时每 50ms 重试一次
-local flush_timer = mp.add_timeout(0.05, function()
-	if not state.spawned then
-		pending_commands = {}
-		return
-	end
-	local remaining = {}
-	for _, cmd in ipairs(pending_commands) do
-		if not run_mpv_try_write(cmd) then
-			remaining[#remaining + 1] = cmd
-		end
-	end
-	pending_commands = remaining
-	if #pending_commands > 0 then
-		flush_timer:resume()
-	end
-end)
-flush_timer:kill()
-
-local function run_mpv(command)
-	if not state.spawned then
-		pending_commands = {}
-		return
-	end
-
-	-- 先尝试清空积压的命令
-	if #pending_commands > 0 then
-		local remaining = {}
-		for _, cmd in ipairs(pending_commands) do
-			if not run_mpv_try_write(cmd) then
-				remaining[#remaining + 1] = cmd
-			end
-		end
-		pending_commands = remaining
-	end
-
-	if not run_mpv_try_write(command) then
-		pending_commands[#pending_commands + 1] = command
-		if not flush_timer:is_enabled() then
-			flush_timer:resume()
-		end
 	end
 end
 

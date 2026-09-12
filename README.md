@@ -7,6 +7,9 @@
 > ⚠️ 本项目是对 uosc 的**二次修改版**，并非官方发行。uosc 原版请前往 [tomasklaen/uosc](https://github.com/tomasklaen/uosc)
 
 ---
+## 示例
+
+<img width="962" height="542" alt="mpv" src="https://github.com/user-attachments/assets/c4cfba14-37b6-47ed-9c78-c169186f4890" />
 
 ## 主要特性
 

@@ -44,7 +44,7 @@ end
 function Timeline:get_effective_size()
 	if Elements:v('speed', 'dragging') then return self.size end
 	local progress_size = math.max(self.min_progress_size, self.progress_size)
-	return progress_size + math.ceil((self.size - self.progress_size) * self:get_visibility())
+	return progress_size + math.ceil((self.size - progress_size) * self:get_visibility())
 end
 
 function Timeline:get_is_hovered() return self.enabled and self.is_hovered end
@@ -162,7 +162,9 @@ function Timeline:handle_cursor_up()
 end
 
 function Timeline:on_global_mouse_leave()
-	self.pressed = false
+	if self.pressed then
+		self:handle_cursor_up()
+	end
 end
 
 function Timeline:on_global_mouse_move()
@@ -185,6 +187,11 @@ function Timeline:cursor_command(command)
 end
 
 function Timeline:render()
+	if not state.duration or state.duration <= 0 or not state.time then
+		self:clear_thumbnail()
+		return
+	end
+
 	if self.size == 0 then
 		self:clear_thumbnail()
 		return
@@ -194,11 +201,9 @@ function Timeline:render()
 	local visibility = self:get_visibility()
 	self.is_hovered = false
 
-	--- 保护 gap
 	local controls_ay = Elements:v('controls', 'ay', display.height)
 	if self.by < controls_ay then
 		cursor:zone('primary_click', {ax = self.ax, ay = self.by, bx = self.bx, by = controls_ay}, function() end)
-		--- 拦截滚轮
 		cursor:zone('wheel_down', {ax = self.ax, ay = self.by, bx = self.bx, by = controls_ay}, function() end)
 		cursor:zone('wheel_up', {ax = self.ax, ay = self.by, bx = self.bx, by = controls_ay}, function() end)
 	end
@@ -217,7 +222,6 @@ function Timeline:render()
 			self:handle_cursor_down()
 			cursor:once('primary_up', function() self:handle_cursor_up() end)
 		end)
-		--- 始终拦截滚轮，根据配置决定是否执行跳转
 		cursor:zone('wheel_down', self, function()
 			if config.timeline_step ~= 0 then
 				mp.commandv('seek', -config.timeline_step, config.timeline_step_flag)
@@ -233,29 +237,29 @@ function Timeline:render()
 	local ass = assdraw.ass_new()
 	local tooltip_gap = round(2 * state.scale)
 	local progress = state.time / state.duration
-    local is_line = options.timeline_style == 'line'
+	local is_line = options.timeline_style == 'line'
 
-    --- 坐标
-    local bax, bay, bbx, bby = self.ax, self.by - size - self.top_border, self.bx, self.by
-    local fay, fby = bay + self.top_border, bby
+	local chapter_gap = 2 * state.scale
 
-    local fax, fbx
-    local line_width = 0
-    if is_line then
-        local minimized_fraction = 1 - math.min((size - self.progress_size) / ((self.size - self.progress_size) / 8), 1)
-        local progress_delta = self.progress_size > 0 and self.progress_line_width - self.line_width or 0
-        line_width = self.line_width + (progress_delta * minimized_fraction)
-        fax = bax + (self.width - line_width) * progress
-        fbx = fax + line_width
-        line_width = line_width - 1
-    else
-        fax = bax
-        fbx = bax + self.width * progress
-    end
+	local bax, bay, bbx, bby = self.ax, self.by - size - self.top_border, self.bx, self.by
+	local fay, fby = bay + self.top_border, bby
 
-    local foreground_size = fby - fay
+	local fax, fbx
+	local line_width = 0
+	if is_line then
+		local minimized_fraction = 1 - math.min((size - self.progress_size) / ((self.size - self.progress_size) / 8), 1)
+		local progress_delta = self.progress_size > 0 and self.progress_line_width - self.line_width or 0
+		line_width = self.line_width + (progress_delta * minimized_fraction)
+		fax = bax + (self.width - line_width) * progress
+		fbx = fax + line_width
+		line_width = line_width - 1
+	else
+		fax = bax
+		fbx = bax + self.width * progress
+	end
 
-	--- t2x
+	local foreground_size = fby - fay
+
 	local time_ax = bax + 0.5
 	local time_width = self.width - line_width - 1
 	local function t2x(time)
@@ -263,7 +267,6 @@ function Timeline:render()
 		return time <= state.time and x or x + line_width
 	end
 
-	--- 收集章节时间一次
 	local chapter_times = {}
 	if state.chapters then
 		for _, ch in ipairs(state.chapters) do
@@ -271,7 +274,6 @@ function Timeline:render()
 		end
 	end
 
-	--- 绘制函数
 	local function draw_heatmap()
 		if options.timeline_heatmap ~= 'no' and self.heatmap and config.opacity.heatmap > 0 and visibility > 0 then
 			local is_above = options.timeline_heatmap == 'above'
@@ -290,26 +292,25 @@ function Timeline:render()
 			ass:rect(fax, fay, fbx, fby, {
 				color = "ecae00",
 				opacity = 0.9,
-				boder = 0
+				border = 0
 			})
 		else
 			local chapter_list = {unpack(chapter_times)}
 			table.insert(chapter_list, state.duration)
 			local current_time = state.time
-			local gap = 3
 			for i = 1, #chapter_list - 1 do
 				local start_time = chapter_list[i]
 				local end_time = chapter_list[i+1]
 				local play_start = start_time
 				local play_end = math.min(end_time, current_time)
 				if play_end > play_start then
-					local x1 = t2x(play_start) + gap
-					local x2 = t2x(play_end) - gap
+					local x1 = t2x(play_start) + chapter_gap
+					local x2 = t2x(play_end) - chapter_gap
 					if x1 < x2 then
 						ass:rect(x1, fay, x2, fby, {
 							color = "ecae00",
 							opacity = 0.9,
-							boder = 0
+							border = 0
 						})
 					end
 				end
@@ -317,7 +318,6 @@ function Timeline:render()
 		end
 	end
 
-	--- 0. 无章节时绘制灰色背景
 	if #chapter_times == 0 and not (self.is_hovered and not self.pressed) then
 		ass:rect(bax, fay, bbx, fby, {
 			color = fg,
@@ -326,18 +326,16 @@ function Timeline:render()
 		})
 	end
 
-	--- 1. 普通章节分段（非悬停）
 	local hovered_segment = nil
 	if (config.opacity.chapters > 0 and (#chapter_times > 0 or state.ab_loop_a or state.ab_loop_b)) then
 		local chapter_opacity = config.opacity.chapters
-		local gap = 3
 		local diamond_border = options.timeline_border and math.max(options.timeline_border, 1) or 1
 
 		for i = 1, #chapter_times do
 			local start_time = chapter_times[i]
 			local end_time = (i < #chapter_times) and chapter_times[i+1] or state.duration
-			local start_x = t2x(start_time) + gap
-			local end_x = t2x(end_time) - gap
+			local start_x = t2x(start_time) + chapter_gap
+			local end_x = t2x(end_time) - chapter_gap
 			if start_x < end_x then
 				local rect = {ax = start_x, ay = fay, bx = end_x, by = fby}
 				local is_hover = get_point_to_rectangle_proximity(cursor, rect) <= 0
@@ -359,7 +357,6 @@ function Timeline:render()
 			end
 		end
 
-		-- A-B loop indicators
 		local has_a, has_b = state.ab_loop_a and state.ab_loop_a >= 0, state.ab_loop_b and state.ab_loop_b > 0
 		local ab_radius = round(math.min(math.max(8, foreground_size * 0.25), foreground_size))
 		local function draw_ab_indicator(time, kind)
@@ -381,7 +378,6 @@ function Timeline:render()
 		if has_b then draw_ab_indicator(state.ab_loop_b, 'b') end
 	end
 
-	-- 2. uncached ranges & custom ranges
 	if state.uncached_ranges then
 		local opts = {size = 80, anchor_y = fby}
 		local texture_char = visibility > 0 and 'b' or 'a'
@@ -398,14 +394,15 @@ function Timeline:render()
 		end
 	end
 
-	for _, chapter_range in ipairs(state.chapter_ranges) do
-		local rax = chapter_range.start < 0.1 and bax or t2x(chapter_range.start)
-		local rbx = chapter_range['end'] > state.duration - 0.1 and bbx
-			or t2x(math.min(chapter_range['end'], state.duration))
-		ass:rect(rax, fay, rbx, fby, {color = chapter_range.color, opacity = chapter_range.opacity})
+	if state.chapter_ranges then
+		for _, chapter_range in ipairs(state.chapter_ranges) do
+			local rax = chapter_range.start < 0.1 and bax or t2x(chapter_range.start)
+			local rbx = chapter_range['end'] > state.duration - 0.1 and bbx
+				or t2x(math.min(chapter_range['end'], state.duration))
+			ass:rect(rax, fay, rbx, fby, {color = chapter_range.color, opacity = chapter_range.opacity})
+		end
 	end
 
-	-- 3. 绘制进度条 + heatmap（顺序由 is_line 决定）
 	if is_line then
 		draw_heatmap()
 		draw_progress()
@@ -414,7 +411,6 @@ function Timeline:render()
 		draw_heatmap()
 	end
 
-	-- 4. 悬停放大效果
 	if hovered_segment then
 		local start_x = hovered_segment.start_x
 		local end_x = hovered_segment.end_x
@@ -445,14 +441,12 @@ function Timeline:render()
 		end
 	end
 
-	-- 无章节时鼠标悬停放大整个进度条
 	if #chapter_times == 0 and self.is_hovered and not self.pressed then
 		local expand = size * 0.7
 		local expanded_ay = fay - expand
 		local expanded_by = fby + expand
 		local play_x = t2x(state.time)
 
-		-- 已播放部分
 		if play_x > bax then
 			ass:rect(bax, expanded_ay, play_x, expanded_by, {
 				color = "ecae00",
@@ -460,7 +454,6 @@ function Timeline:render()
 				border = 0,
 			})
 		end
-		-- 未播放部分
 		if play_x < bbx then
 			ass:rect(play_x, expanded_ay, bbx, expanded_by, {
 				color = fg,
@@ -470,115 +463,116 @@ function Timeline:render()
 		end
 	end
 
-	-- 5. 悬浮时间戳、缩略图等
 	local rendered_thumbnail = false
 	if (self.proximity_raw <= 0 or self.pressed) and not Elements:v('speed', 'dragging') then
-    local cursor_x = cursor.x
-    local hovered_seconds = self:get_time_at_x(cursor.x)
+		local cursor_x = cursor.x
+		local hovered_seconds = self:get_time_at_x(cursor.x)
 
-    -- cursor line
-    local color = ((fax - 0.5) < cursor_x and cursor_x < (fbx + 0.5)) and bg or fg
-    local ax, ay, bx, by = cursor_x - 0.5, fay, cursor_x + 0.5, fby
-    ass:rect(ax, ay, bx, by, {color = color, opacity = 0.33})
-    local tooltip_anchor = {ax = ax, ay = ay - self.top_border, bx = bx, by = by}
+		local color = ((fax - 0.5) < cursor_x and cursor_x < (fbx + 0.5)) and bg or fg
+		local ax, ay, bx, by = cursor_x - 0.5, fay, cursor_x + 0.5, fby
+		ass:rect(ax, ay, bx, by, {color = color, opacity = 0.33})
+		local tooltip_anchor = {ax = ax, ay = ay - self.top_border, bx = bx, by = by}
 
-    -- thumbnail
-    if not thumbnail.disabled and (not self.pressed or self.pressed.distance < 5)
-        and thumbnail.width ~= 0 and thumbnail.height ~= 0 then
-        local border = 0
-        local thumb_x_margin, thumb_y_margin = tooltip_gap + bax, tooltip_gap + 35
-        local thumb_width, thumb_height = thumbnail.width, thumbnail.height
-        local thumb_x = round(clamp(
-            thumb_x_margin,
-            cursor_x - thumb_width / 2,
-            display.width - thumb_width - thumb_x_margin
-        ))
-        local thumb_y = round(tooltip_anchor.ay - thumb_y_margin - thumb_height)
-        local ax, ay = (thumb_x - border), (thumb_y - border)
-        local bx, by = (thumb_x + thumb_width + border), (thumb_y + thumb_height + border)
-        local thumb_seconds = (state.rebase_start_time == false and state.start_time)
-            and (hovered_seconds - state.start_time) or hovered_seconds
-        request_thumbnail(thumb_seconds, thumb_x, thumb_y)
-        self.has_thumbnail, rendered_thumbnail = true, true
-        tooltip_anchor.ay = ay
-    end
+		if not thumbnail.disabled and (not self.pressed or self.pressed.distance < 5)
+			and thumbnail.width ~= 0 and thumbnail.height ~= 0 then
+			local border = 0
+			local thumb_x_margin, thumb_y_margin = tooltip_gap + bax, tooltip_gap + 15 * state.scale
+			local thumb_width, thumb_height = thumbnail.width, thumbnail.height
+			local thumb_x = round(clamp(
+				thumb_x_margin,
+				cursor_x - thumb_width / 2,
+				display.width - thumb_width - thumb_x_margin
+			))
+			local thumb_y = round(tooltip_anchor.ay - thumb_y_margin - thumb_height)
+			local ax, ay = (thumb_x - border), (thumb_y - border)
+			local bx, by = (thumb_x + thumb_width + border), (thumb_y + thumb_height + border)
+			local thumb_seconds = (state.rebase_start_time == false and state.start_time)
+				and (hovered_seconds - state.start_time) or hovered_seconds
 
-    -- timestamp
-    local opts = {
-        size = self.font_size * 4,
-        offset = round(6 * state.scale),
-        margin = tooltip_gap,
-        timestamp = options.time_precision > 0,
-        background = false,
-        bold = true,
-    }
-    local hovered_time_human = format_time(hovered_seconds, state.duration)
-    opts.width_overwrite = timestamp_width(hovered_time_human, opts)
-    tooltip_anchor = ass:tooltip(tooltip_anchor, hovered_time_human, opts)
-end
+			local last = self._last_thumb_request
+			if not last
+				or math.abs(thumb_seconds - last.time) > 1
+				or math.abs(thumb_x - last.x) > 5
+				or math.abs(thumb_y - last.y) > 5 then
+				request_thumbnail(thumb_seconds, thumb_x, thumb_y)
+				self._last_thumb_request = { time = thumb_seconds, x = thumb_x, y = thumb_y }
+			end
+			self.has_thumbnail, rendered_thumbnail = true, true
+			tooltip_anchor.ay = ay
+		end
+
+		local opts = {
+			size = self.font_size * 4,
+			offset = round(6 * state.scale),
+			margin = tooltip_gap,
+			timestamp = options.time_precision > 0,
+			background = false,
+			bold = true,
+		}
+		local hovered_time_human = format_time(hovered_seconds, state.duration)
+		opts.width_overwrite = timestamp_width(hovered_time_human, opts)
+		tooltip_anchor = ass:tooltip(tooltip_anchor, hovered_time_human, opts)
+	end
 
 	if not rendered_thumbnail then self:clear_thumbnail() end
 	return ass
 end
 
--- ============================================================
--- 独立的时间显示控件（在 Controls 中作为元素使用）
--- ============================================================
 ---@class Time : Element
 local Time = class(Element)
 
 function Time:init(props)
-    Element.init(self, 'time', props)
-    self.height = 0
+	Element.init(self, 'time', props)
+	self.height = 0
 end
 
 function Time:get_visibility()
-    return Elements:maybe('timeline', 'get_is_hovered') and -1 or Element.get_visibility(self)
+	return Elements:maybe('timeline', 'get_is_hovered') and -1 or Element.get_visibility(self)
 end
 
 function Time:on_coordinates()
-    self.height = self.by - self.ay
-    self.width = self.bx - self.ax
-    self.font_size = round(self.height * 0.4 * options.font_scale * 1.2)
+	self.height = self.by - self.ay
+	self.width = self.bx - self.ax
+	self.font_size = round(self.height * 0.4 * options.font_scale * 1.2)
 end
 
 function Time:on_options() self:on_coordinates() end
 
 function Time:render()
-    local visibility = self:get_visibility()
-    if visibility <= 0 then return end
+	local visibility = self:get_visibility()
+	if visibility <= 0 then return end
 
-    local total = state.duration and state.duration > 0 and format_time(state.duration, state.duration) or '--:--:--'
-    local current = state.time_human or '--:--:--'
-    local text = current .. ' / ' .. total
+	local total = state.duration and state.duration > 0 and format_time(state.duration, state.duration) or '--:--:--'
+	local current = state.time_human or '--:--:--'
+	local text = current .. ' / ' .. total
 
-    local font_size = round(self.height * 0.48 * options.font_scale * 1.5)
-    local opts = {size = font_size, bold = true}
-    local text_w = text_width(text, opts)
-    local pad = round(4 * state.scale)
-    local needed_width = text_w + pad * 2
-    local current_width = self.bx - self.ax
+	local font_size = round(self.height * 0.48 * options.font_scale * 1.5)
+	local opts = {size = font_size, bold = true}
+	local text_w = text_width(text, opts)
+	local pad = round(4 * state.scale)
+	local needed_width = text_w + pad * 2
+	local current_width = self.bx - self.ax
 
-    if math.abs(needed_width - current_width) > 5 then
-        local height = self.by - self.ay
-        if height > 0 then
-            local new_ratio = clamp(1.2, needed_width / height, 10)
-            local controls = Elements.controls
-            if controls and self.control_index then
-                controls:update_control_ratio(self.control_index, new_ratio)
-            end
-        end
-    end
+	if math.abs(needed_width - current_width) > 5 then
+		local height = self.by - self.ay
+		if height > 0 then
+			local new_ratio = clamp(1.2, needed_width / height, 10)
+			local controls = Elements.controls
+			if controls and self.control_index then
+				controls:update_control_ratio(self.control_index, new_ratio)
+			end
+		end
+	end
 
-    local half_x = self.ax + (self.bx - self.ax) / 2
-    local ass = assdraw.ass_new()
-    ass:txt(half_x, self.ay + self.height / 2, 5, text, {
-        size = font_size, color = bgt,
-        border = options.text_border * state.scale, border_color = bg,
-        opacity = visibility, bold = true,
-        clip = '\\clip(' .. self.ax .. ',' .. self.ay .. ',' .. self.bx .. ',' .. self.by .. ')',
-    })
-    return ass
+	local half_x = self.ax + (self.bx - self.ax) / 2
+	local ass = assdraw.ass_new()
+	ass:txt(half_x, self.ay + self.height / 2, 5, text, {
+		size = font_size, color = bgt,
+		border = options.text_border * state.scale, border_color = bg,
+		opacity = visibility, bold = true,
+		clip = '\\clip(' .. self.ax .. ',' .. self.ay .. ',' .. self.bx .. ',' .. self.by .. ')',
+	})
+	return ass
 end
 
 Timeline.Time = Time

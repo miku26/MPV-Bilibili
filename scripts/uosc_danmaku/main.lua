@@ -11,8 +11,6 @@ require("modules/parse")
 require('modules/render')
 require('modules/menu')
 
-_G.danmaku_options = options
-
 SAVED_PROPS_PATH = mp.command_native({"expand-path", "~~/saved-props.json"})
 
 -- ============================================================
@@ -36,7 +34,7 @@ end
 -- ============================================================
 -- 样式广播 + 描边映射
 -- ============================================================
-local STYLE_KEYS = {"fontsize", "scrolltime", "opacity", "displayarea", "bold", "fontname"}
+local STYLE_KEYS = {"fontsize", "scrolltime", "opacity", "displayarea", "bold", "fontname", "stroke_type"}
 
 local function emit_style_update()
     for _, k in ipairs(STYLE_KEYS) do
@@ -61,7 +59,7 @@ end
 -- 样式加载 / 保存
 -- ============================================================
 local STYLE_DEFAULTS = {
-    fontsize     = 38,
+    fontsize     = 36,
     scrolltime   = 15,
     opacity      = 0.7,
     displayarea  = 0.6,
@@ -88,6 +86,7 @@ local function load_style_settings()
     options.displayarea = tostring(style.displayarea)
     options.bold        = (style.bold == true or style.bold == "true")
     options.fontname    = style.fontname
+    options.stroke_type = style.stroke_type or 'heavy'
 
     local outline, shadow = get_stroke_values(style.stroke_type)
     options.outline = outline
@@ -184,6 +183,7 @@ function set_danmaku_enabled(flag, silent)
 end
 
 function show_loaded(init)
+    if COMMENTS == nil then return end
     show_message("弹幕加载成功，共计" .. #COMMENTS .. "条弹幕", 3)
     if init then msg.info("弹幕加载成功，共计" .. #COMMENTS .. "条弹幕") end
 end
@@ -378,23 +378,18 @@ function try_load_from_directory(search_dir, filename)
                 ext = ext:lower()
                 if ext == "xml" or ext == "json" then
                     local name_lower = name_no_ext:lower()
-                    if base_lower:find(name_lower, 1, true) or name_lower:find(base_lower, 1, true) then
-                        local name_lower = name_no_ext:lower()
-						local found_name = base_lower:find(name_lower, 1, true)
-						local found_base = name_lower:find(base_lower, 1, true)
-						if found_name or found_base then
-							local match_len
-							if found_name and found_base then
-								match_len = math.min(#name_lower, #base_lower)
-							else
-								match_len = found_name and #name_lower or #base_lower
-							end
-							table.insert(candidates, {
-								name = item,
-								path = utils.join_path(search_dir, item),
-								match_len = match_len,
-							})
-						end
+                    local found_name = base_lower:find(name_lower, 1, true)
+                    local found_base = name_lower:find(base_lower, 1, true)
+                    if found_name or found_base then
+                        local match_len
+                        if found_name and found_base then
+                            match_len = math.min(#name_lower, #base_lower)
+                        elseif found_name then
+                            match_len = #name_lower
+                        else
+                            match_len = #base_lower
+                        end
+
                         table.insert(candidates, {
                             name = item,
                             path = utils.join_path(search_dir, item),

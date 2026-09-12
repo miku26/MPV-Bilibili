@@ -1,16 +1,10 @@
 -- modified from https://github.com/rkscv/danmaku/blob/main/danmaku.lua
 local msg = require('mp.msg')
-local utils = require("mp.utils")
 local unpack = unpack or table.unpack
 
 local osd_width, osd_height, pause = 0, 0, true
 local time_pos_observer_active = false
 local overlay = mp.create_osd_overlay('ass-events')
-
-local RE_FS = "\\fs(%d+)"
-
-local ass_prefix_cache_key = nil
-local ass_prefix_cache = nil
 
 -- 统一的 OSD 尺寸计算
 local function get_osd_metrics()
@@ -36,8 +30,7 @@ local function realtime_position_text(event, pos, displayarea)
     local current_x = x1 + (x2 - x1) * progress
     local current_y = y1 + (y2 - y1) * progress
     if current_y > displayarea then return end
-
-    local clean_text = event.text_no_move or event.text
+    local clean_text = event.text_no_move or event.text:gsub("\\move%(.-%)", "")
     return string.format("{\\pos(%.1f,%.1f)\\an8}%s", current_x, current_y, clean_text)
 end
 
@@ -59,44 +52,36 @@ function render(pos_arg)
     end
 
     local fontname = options.fontname
-    local fontsize = options.fontsize
-    local opacity = tonumber(options.opacity)
-    local alpha = string.format("%02X", (1 - (opacity or 0)) * 255)
+    local fontsize = tonumber(options.fontsize) or 36
+    local opacity = tonumber(options.opacity) or 0.8
+    local alpha = string.format("%02X", (1 - opacity) * 255)
 
     local width, height = get_osd_metrics()
     local ratio = osd_width / osd_height
     if width / height < ratio then
-        fontsize = options.fontsize - ratio * 2
+        fontsize = fontsize - ratio * 2
     end
 
     local ass_events = {}
-    local max_display = math.max(options.scrolltime, options.fixtime)
+    local max_display = math.max(
+        tonumber(options.scrolltime) or 15,
+        tonumber(options.fixtime) or 5
+    )
     local window_start = pos - max_display
     local lo = binary_search(COMMENTS, window_start, function(item) return item.start_time end)
 
-    local ass_prefix_key = tostring(fontname) .. "|" .. tostring(fontsize) .. "|" .. tostring(alpha) .. "|" .. tostring(options.outline) .. "|" .. tostring(options.shadow) .. "|" .. tostring(options.bold and "1" or "0")
-    local ass_prefix
-    if ass_prefix_cache_key == ass_prefix_key then
-        ass_prefix = ass_prefix_cache
-    else
-        ass_prefix = string.format(
-            "{\\rDefault\\fn%s\\fs%d\\c&HFFFFFF&\\alpha&H%s\\bord%s\\shad%s\\b%s\\q2}",
-            fontname, fontsize, alpha, options.outline, options.shadow, options.bold and "1" or "0")
-        ass_prefix_cache_key = ass_prefix_key
-        ass_prefix_cache = ass_prefix
-    end
+    local ass_prefix = string.format(
+        "{\\rDefault\\fn%s\\fs%d\\c&HFFFFFF&\\alpha&H%s\\bord%s\\shad%s\\b%s\\q2}",
+        fontname, fontsize, alpha, options.outline, options.shadow, options.bold and "1" or "0")
+
+    local displayarea = height * (tonumber(options.displayarea) or 0.5)
 
     for i = lo, #COMMENTS do
         local event = COMMENTS[i]
         if event.start_time > pos then break end
         if event.end_time >= pos then
-            local text = realtime_position_text(event, pos, height * options.displayarea)
+            local text = realtime_position_text(event, pos, displayarea)
             if text then
-                if event.has_fs_override then
-					text = text:gsub(RE_FS, function(size)
-						return string.format("\\fs%d", math.floor((tonumber(size) or 0) * 1.5))
-					end)
-				end
                 table.insert(ass_events, ass_prefix .. text)
             end
         end
@@ -192,7 +177,7 @@ function show_message(text, time)
     message_timer.timeout = time or 3
     message_timer:kill()
     message_overlay:remove()
-    local message = string.format("{\\an%d\\pos(%d,%d)}%s", options.message_anlignment,
+    local message = string.format("{\\an%d\\pos(%d,%d)}%s", options.message_alignment,
         options.message_x, options.message_y, text)
     local width, height = get_osd_metrics()
     message_overlay.res_x = width
