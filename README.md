@@ -1,10 +1,10 @@
 # MPV-Bilibili
 
-一个基于 [uosc](https://github.com/tomasklaen/uosc) **5.13.0** 的深度定制版 mpv 界面脚本。
+基于 [uosc](https://github.com/tomasklaen/uosc) **5.13.0** 的改进的 mpv 项目
 
-在保留 uosc 原有交互逻辑的基础上，做了大量代码精简与重构，并针对**中文用户**的观影习惯集成了弹幕、选集、倍速、播放模式等常用功能。
+在保留 uosc 原有交互逻辑的基础上，做了大量代码精简与重构
 
-> ⚠️ 本项目是对 uosc 的**二次修改版**，并非官方发行。uosc 原版请前往 [tomasklaen/uosc](https://github.com/tomasklaen/uosc)。
+> ⚠️ 本项目是对 uosc 的**二次修改版**，并非官方发行。uosc 原版请前往 [tomasklaen/uosc](https://github.com/tomasklaen/uosc)
 
 ---
 
@@ -17,7 +17,7 @@
 
 ### 弹幕集成
 
-- 修改自 [uosc_danmaku](https://github.com/ Tony15/MPV-uosc_danmaku) ，可在 控制栏 中直接打开**弹幕设置面板**
+- 修改自 [uosc_danmaku](https://github.com/Tony15/MPV-uosc_danmaku) ，可在 控制栏 中直接打开**弹幕设置面板**
 - 主面板提供 4 个常用滑块：
   - 显示区域（0.25 ~ 1.0）
   - 不透明度（0.15 ~ 1.0）
@@ -43,7 +43,7 @@
 - 单集循环
 - 乱序播放
 
-### 倍速面板（Speed）
+### 倍速面板
 
 - 预设 6 档常见倍速：`2.0x / 1.5x / 1.25x / 1.0x / 0.75x / 0.5x`
 - 当前倍速高亮显示。
@@ -81,8 +81,8 @@
 
 [uosc](https://github.com/tomasklaen/uosc) — 原版界面脚本
 
-[uosc_danmaku](https://github.com/ Tony15/MPV-uosc_danmaku) — 弹幕脚本
+[uosc_danmaku](https://github.com/Tony15/MPV-uosc_danmaku) — 弹幕脚本
 
-[thumb_engine](https://github.com/po5/thumbfast)(https://github.com/hooke007/mpv_PlayKit) — 缩略图引擎
+thumb_engine参考两部分，[【1】](https://github.com/po5/thumbfast)、[【2】](https://github.com/hooke007/mpv_PlayKit) — 缩略图引擎
 
 所有 mpv 社区贡献者
