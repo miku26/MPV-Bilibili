@@ -1,0 +1,239 @@
+-- modified from https://github.com/rkscv/danmaku/blob/main/danmaku.lua
+local msg = require('mp.msg')
+local utils = require("mp.utils")
+local unpack = unpack or table.unpack
+
+local osd_width, osd_height, pause = 0, 0, true
+local time_pos_observer_active = false
+local overlay = mp.create_osd_overlay('ass-events')
+
+local RE_FS = "\\fs(%d+)"
+
+local ass_prefix_cache_key = nil
+local ass_prefix_cache = nil
+
+-- 统一的 OSD 尺寸计算
+local function get_osd_metrics()
+    local width, height = 1920, 1080
+    local ratio = osd_width / osd_height
+    if width / height < ratio then
+        height = width / ratio
+    end
+    return width, height
+end
+
+-- event.style 只会是 R2L / TOP / BTM
+local function realtime_position_text(event, pos, displayarea)
+    if not event.move then
+        local _, current_y = unpack(event.pos)
+        if not current_y or tonumber(current_y) > displayarea then return end
+        return string.format("{\\an8}%s", event.text)
+    end
+
+    local x1, y1, x2, y2 = unpack(event.move)
+    local duration = event.end_time - event.start_time
+    local progress = (pos - event.start_time) / duration
+    local current_x = x1 + (x2 - x1) * progress
+    local current_y = y1 + (y2 - y1) * progress
+    if current_y > displayarea then return end
+
+    local clean_text = event.text_no_move or event.text
+    return string.format("{\\pos(%.1f,%.1f)\\an8}%s", current_x, current_y, clean_text)
+end
+
+function render(pos_arg)
+    if COMMENTS == nil then return end
+    local pos, err
+    if pos_arg == nil then
+        pos, err = mp.get_property_number('time-pos')
+        if err ~= nil then
+            return msg.error(err)
+        end
+    else
+        pos = pos_arg
+    end
+
+    if not pos then
+        overlay:remove()
+        return
+    end
+
+    local fontname = options.fontname
+    local fontsize = options.fontsize
+    local opacity = tonumber(options.opacity)
+    local alpha = string.format("%02X", (1 - (opacity or 0)) * 255)
+
+    local width, height = get_osd_metrics()
+    local ratio = osd_width / osd_height
+    if width / height < ratio then
+        fontsize = options.fontsize - ratio * 2
+    end
+
+    local ass_events = {}
+    local max_display = math.max(options.scrolltime, options.fixtime)
+    local window_start = pos - max_display
+    local lo = binary_search(COMMENTS, window_start, function(item) return item.start_time end)
+
+    local ass_prefix_key = tostring(fontname) .. "|" .. tostring(fontsize) .. "|" .. tostring(alpha) .. "|" .. tostring(options.outline) .. "|" .. tostring(options.shadow) .. "|" .. tostring(options.bold and "1" or "0")
+    local ass_prefix
+    if ass_prefix_cache_key == ass_prefix_key then
+        ass_prefix = ass_prefix_cache
+    else
+        ass_prefix = string.format(
+            "{\\rDefault\\fn%s\\fs%d\\c&HFFFFFF&\\alpha&H%s\\bord%s\\shad%s\\b%s\\q2}",
+            fontname, fontsize, alpha, options.outline, options.shadow, options.bold and "1" or "0")
+        ass_prefix_cache_key = ass_prefix_key
+        ass_prefix_cache = ass_prefix
+    end
+
+    for i = lo, #COMMENTS do
+        local event = COMMENTS[i]
+        if event.start_time > pos then break end
+        if event.end_time >= pos then
+            local text = realtime_position_text(event, pos, height * options.displayarea)
+            if text then
+                if event.has_fs_override then
+					text = text:gsub(RE_FS, function(size)
+						return string.format("\\fs%d", math.floor((tonumber(size) or 0) * 1.5))
+					end)
+				end
+                table.insert(ass_events, ass_prefix .. text)
+            end
+        end
+    end
+
+    overlay.res_x = width
+    overlay.res_y = height
+    overlay.data = table.concat(ass_events, '\n')
+    overlay:update()
+end
+
+local function time_pos_callback(_, time_pos)
+    if time_pos then
+        render(time_pos)
+    else
+        overlay:remove()
+    end
+end
+
+local function start_time_observer()
+    if not time_pos_observer_active then
+        mp.observe_property('time-pos', 'number', time_pos_callback)
+        time_pos_observer_active = true
+    end
+end
+
+local function stop_time_observer()
+    if time_pos_observer_active then
+        mp.unobserve_property(time_pos_callback)
+        time_pos_observer_active = false
+    end
+end
+
+function render_danmaku(from_menu, no_osd)
+    if ENABLED and (from_menu or get_danmaku_visibility()) then
+        if not no_osd then
+            show_loaded(true)
+        end
+        mp.command("script-message-to uosc set show_danmaku on")
+        show_danmaku_func()
+    else
+        show_message("")
+        hide_danmaku_func()
+    end
+end
+
+local function filter_state(label, name)
+    local filters = mp.get_property_native("vf")
+    for _, filter in pairs(filters) do
+        if filter.label == label or filter.name == name
+            or filter.params[name] ~= nil then
+            return true
+        end
+    end
+    return false
+end
+
+function show_danmaku_func()
+    mp.set_property_bool(HAS_DANMAKU, true)
+    set_danmaku_visibility(true)
+    render()
+    if not pause then
+        start_time_observer()
+    end
+    if options.vf_fps then
+        local display_fps = mp.get_property_number('display-fps')
+        local video_fps = mp.get_property_number('estimated-vf-fps')
+        if (display_fps and display_fps < 58) or (video_fps and video_fps > 58) then
+            return
+        end
+        if not filter_state("danmaku", "fps") then
+            mp.commandv("vf", "append", string.format("@danmaku:fps=fps=%s", options.fps))
+        end
+    end
+end
+
+function hide_danmaku_func()
+    stop_time_observer()
+    mp.set_property_bool(HAS_DANMAKU, false)
+    set_danmaku_visibility(false)
+    overlay:remove()
+    if filter_state("danmaku") then
+        mp.commandv("vf", "remove", "@danmaku")
+    end
+end
+
+local message_overlay = mp.create_osd_overlay('ass-events')
+local message_timer = mp.add_timeout(3, function()
+    message_overlay:remove()
+end, true)
+
+function show_message(text, time)
+    message_timer.timeout = time or 3
+    message_timer:kill()
+    message_overlay:remove()
+    local message = string.format("{\\an%d\\pos(%d,%d)}%s", options.message_anlignment,
+        options.message_x, options.message_y, text)
+    local width, height = get_osd_metrics()
+    message_overlay.res_x = width
+    message_overlay.res_y = height
+    message_overlay.data = message
+    message_overlay:update()
+    message_timer:resume()
+end
+
+mp.observe_property('osd-width', 'number', function(_, value) osd_width = value or osd_width end)
+mp.observe_property('osd-height', 'number', function(_, value) osd_height = value or osd_height end)
+mp.observe_property('pause', 'bool', function(_, value)
+    if value ~= nil then
+        pause = value
+    end
+    if ENABLED then
+        if pause then
+            stop_time_observer()
+        elseif COMMENTS ~= nil then
+            start_time_observer()
+        end
+    end
+end)
+
+mp.register_event('playback-restart', function(event)
+    if event.error then
+        return msg.error(event.error)
+    end
+    if ENABLED and COMMENTS ~= nil then
+        render()
+    end
+end)
+
+mp.add_hook("on_unload", 50, function()
+    COMMENTS, DELAY = nil, 0
+    stop_time_observer()
+    overlay:remove()
+    mp.set_property_native(DELAY_PROPERTY, 0)
+    if filter_state("danmaku") then
+        mp.commandv("vf", "remove", "@danmaku")
+    end
+
+    DANMAKU = { sources = {}, count = 1 }
+end)
